@@ -1,0 +1,90 @@
+import { Theme } from "../theme.slint";
+
+component RailItem inherits Rectangle {
+    in property <string> label;
+    in property <string> shortcut;
+    in property <bool> active: false;
+
+    callback triggered();
+
+    height: 54px;
+    width: 100%;
+    border-radius: 6px;
+    background: root.active ? Theme.bg-selected : (touch.has-hover ? Theme.bg-hover : transparent);
+    border-width: root.active ? 1px : 0px;
+    border-color: Theme.accent-primary;
+    accessible-role: button;
+    accessible-label: root.label;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        padding: 4px;
+
+        Text {
+            text: root.label;
+            color: root.active ? Theme.accent-primary : Theme.text-primary;
+            font-size: 12px;
+            font-weight: root.active ? 700 : 500;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: root.shortcut;
+            color: Theme.text-muted;
+            font-family: Theme.font-mono;
+            font-size: 10px;
+            horizontal-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.triggered();
+        }
+    }
+}
+
+export component ActivityRail inherits Rectangle {
+    in property <int> active-view: 0;
+
+    callback select-view(int);
+
+    width: 118px;
+    background: Theme.bg-surface;
+    border-width: 1px;
+    border-color: Theme.border-subtle;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+        alignment: start;
+
+        RailItem {
+            label: "Analytics";
+            shortcut: "Ctrl+1";
+            active: root.active-view == 0;
+            triggered => {
+                root.select-view(0);
+            }
+        }
+
+        RailItem {
+            label: "Commits & Diffs";
+            shortcut: "Ctrl+2";
+            active: root.active-view == 1;
+            triggered => {
+                root.select-view(1);
+            }
+        }
+
+        RailItem {
+            label: "Files & Blame";
+            shortcut: "Ctrl+3";
+            active: root.active-view == 2;
+            triggered => {
+                root.select-view(2);
+            }
+        }
+    }
+}

@@ -1,0 +1,3 @@
+# 0003: Hybrid Slint and Plotters Chart Rendering
+
+Slint provides reactive declarative widgets and virtualized lists (`ListView`) with native pointer hit-testing, but does not include a built-in charting axis and curve layout engine for dense multi-year time-series data. `crates/app` uses a hybrid approach: time-series code churn and commit velocity plots are rasterized in Rust with `plotters` into a `slint::SharedPixelBuffer` bound to an `Image` element, while the 52-week commit heatmap grid, stacked language proportion bar, contributor leaderboard, and File Hotspot tables are built from native Slint components so clicks drill directly into filtered commits or file blame views.

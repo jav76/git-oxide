@@ -1,0 +1,167 @@
+import { ComboBox } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+
+export component TopBar inherits Rectangle {
+    in property <string> repo-name: "git-oxide";
+    in property <string> repo-path: "";
+    in property <[string]> ref-names: ["HEAD"];
+    in-out property <string> active-ref: "HEAD";
+    in property <string> active-filter-text: "";
+    in property <string> indexing-status-text: "Ready";
+    in property <bool> is-indexing: false;
+
+    callback open-repo-dialog();
+    callback select-ref(string);
+    callback clear-filter();
+
+    height: 48px;
+    background: Theme.bg-surface;
+    border-width: 1px;
+    border-color: Theme.border-subtle;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 12px;
+        alignment: space-between;
+
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+
+            Rectangle {
+                width: 96px;
+                height: 28px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 4px;
+                background: Theme.bg-elevated;
+                border-width: 1px;
+                border-color: Theme.accent-primary;
+
+                Text {
+                    text: "git-oxide";
+                    color: Theme.accent-primary;
+                    font-family: Theme.font-mono;
+                    font-size: 13px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+
+                Text {
+                    text: root.repo-name;
+                    color: Theme.text-primary;
+                    font-size: 13px;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: root.repo-path;
+                    color: Theme.text-secondary;
+                    font-family: Theme.font-mono;
+                    font-size: 11px;
+                    overflow: elide;
+                    max-width: 340px;
+                }
+            }
+
+            Rectangle {
+                width: 98px;
+                height: 28px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 4px;
+                background: open-touch.has-hover ? Theme.bg-hover : Theme.bg-elevated;
+                border-width: 1px;
+                border-color: Theme.border-subtle;
+                accessible-role: button;
+                accessible-label: "Open repository directory";
+
+                Text {
+                    text: "Open Repo...";
+                    color: Theme.text-primary;
+                    font-size: 12px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                open-touch := TouchArea {
+                    clicked => {
+                        root.open-repo-dialog();
+                    }
+                }
+            }
+
+            ComboBox {
+                width: 190px;
+                height: 30px;
+                y: (parent.height - self.height) / 2;
+                model: root.ref-names;
+                current-value <=> root.active-ref;
+                selected(val) => {
+                    root.select-ref(val);
+                }
+            }
+
+            if root.active-filter-text != "" : Rectangle {
+                height: 26px;
+                width: filter-layout.preferred-width + 16px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 13px;
+                background: Theme.bg-selected;
+                border-width: 1px;
+                border-color: Theme.accent-primary;
+                accessible-role: button;
+                accessible-label: "Clear active commit filter";
+
+                filter-layout := HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 6px;
+                    alignment: center;
+
+                    Text {
+                        text: root.active-filter-text + "  [x]";
+                        color: Theme.text-primary;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                TouchArea {
+                    clicked => {
+                        root.clear-filter();
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+
+            Rectangle {
+                height: 26px;
+                width: status-label.preferred-width + 20px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 4px;
+                background: Theme.bg-elevated;
+                border-width: 1px;
+                border-color: root.is-indexing ? Theme.accent-amber : Theme.accent-emerald;
+
+                status-label := Text {
+                    text: root.indexing-status-text;
+                    color: root.is-indexing ? Theme.accent-amber : Theme.accent-emerald;
+                    font-family: Theme.font-mono;
+                    font-size: 11px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,249 @@
+import { Theme } from "theme.slint";
+import {
+    UiTokenSpan,
+    UiDiffRow,
+    UiCommitRow,
+    UiChangedFileRow,
+    UiLanguageRow,
+    UiContributorRow,
+    UiHotspotRow,
+    UiHeatmapDay,
+    UiHeatmapWeek,
+    UiTreeEntryRow,
+    UiBlameRow
+} from "models.slint";
+import { TopBar } from "components/top_bar.slint";
+import { ActivityRail } from "components/activity_rail.slint";
+import { AnalyticsView } from "views/analytics_view.slint";
+import { CommitsDiffView } from "views/commits_diff_view.slint";
+import { FilesBlameView } from "views/files_blame_view.slint";
+
+export {
+    UiTokenSpan,
+    UiDiffRow,
+    UiCommitRow,
+    UiChangedFileRow,
+    UiLanguageRow,
+    UiContributorRow,
+    UiHotspotRow,
+    UiHeatmapDay,
+    UiHeatmapWeek,
+    UiTreeEntryRow,
+    UiBlameRow
+}
+
+export component AppWindow inherits Window {
+    in property <string> repo-name: "git-oxide";
+    in property <string> repo-path: "";
+    in property <[string]> ref-names: ["HEAD"];
+    in-out property <string> active-ref: "HEAD";
+    in property <string> active-filter-text: "";
+    in property <string> indexing-status-text: "Ready";
+    in property <bool> is-indexing: false;
+    in-out property <int> active-view: 0;
+
+    // Analytics view properties
+    in property <string> total-commits-text: "0";
+    in property <string> total-contributors-text: "0";
+    in property <string> total-files-text: "0";
+    in property <string> total-code-lines-text: "0";
+    in property <[UiLanguageRow]> languages: [];
+    in property <[UiHeatmapWeek]> heatmap-weeks: [];
+    in property <[UiContributorRow]> contributors: [];
+    in property <[UiHotspotRow]> hotspots: [];
+    in property <image> churn-chart-image;
+    in-out property <bool> churn-monthly-mode: false;
+
+    // Commits & Diffs view properties
+    in property <[UiCommitRow]> commits: [];
+    in property <string> selected-commit-oid: "";
+    in property <string> selected-commit-summary: "";
+    in property <string> selected-commit-author: "";
+    in property <string> selected-commit-date: "";
+    in property <[UiChangedFileRow]> changed-files: [];
+    in property <string> selected-diff-file: "";
+    in property <[UiDiffRow]> diff-rows: [];
+    in-out property <bool> is-split-diff: false;
+    in-out property <string> commit-search-query: "";
+
+    // Files & Blame view properties
+    in property <[UiTreeEntryRow]> tree-entries: [];
+    in property <string> selected-tree-file: "";
+    in property <[UiBlameRow]> blame-rows: [];
+    in-out property <bool> show-blame-gutter: true;
+    in-out property <string> file-filter-query: "";
+
+    // Top-level callbacks handled by Rust controller
+    callback open-repo-dialog();
+    callback select-ref(string);
+    callback clear-filter();
+    callback select-view(int);
+    callback filter-by-date(string);
+    callback filter-by-author(string);
+    callback inspect-file-blame(string);
+    callback select-churn-granularity(bool);
+    callback filter-commits(string);
+    callback select-commit(string);
+    callback select-changed-file(string);
+    callback toggle-diff-mode(bool);
+    callback filter-tree-files(string);
+    callback select-tree-file(string);
+    callback toggle-blame-mode(bool);
+    callback jump-to-commit(string);
+
+    title: "git-oxide - " + root.repo-name;
+    preferred-width: 1380px;
+    preferred-height: 860px;
+    min-width: 960px;
+    min-height: 640px;
+    background: Theme.bg-canvas;
+
+    forward-focus: key-handler;
+
+    key-handler := FocusScope {
+        key-pressed(event) => {
+            if event.modifiers.control {
+                if event.text == "1" {
+                    root.active-view = 0;
+                    root.select-view(0);
+                    return accept;
+                }
+                if event.text == "2" {
+                    root.active-view = 1;
+                    root.select-view(1);
+                    return accept;
+                }
+                if event.text == "3" {
+                    root.active-view = 2;
+                    root.select-view(2);
+                    return accept;
+                }
+                if event.text == "o" || event.text == "O" {
+                    root.open-repo-dialog();
+                    return accept;
+                }
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            TopBar {
+                repo-name: root.repo-name;
+                repo-path: root.repo-path;
+                ref-names: root.ref-names;
+                active-ref <=> root.active-ref;
+                active-filter-text: root.active-filter-text;
+                indexing-status-text: root.indexing-status-text;
+                is-indexing: root.is-indexing;
+                open-repo-dialog => {
+                    root.open-repo-dialog();
+                }
+                select-ref(val) => {
+                    root.select-ref(val);
+                }
+                clear-filter => {
+                    root.clear-filter();
+                }
+            }
+
+            HorizontalLayout {
+                vertical-stretch: 1;
+
+                ActivityRail {
+                    active-view: root.active-view;
+                    select-view(idx) => {
+                        root.active-view = idx;
+                        root.select-view(idx);
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Theme.bg-canvas;
+
+                    if root.active-view == 0 : AnalyticsView {
+                        width: 100%;
+                        height: 100%;
+                        total-commits-text: root.total-commits-text;
+                        total-contributors-text: root.total-contributors-text;
+                        total-files-text: root.total-files-text;
+                        total-code-lines-text: root.total-code-lines-text;
+                        languages: root.languages;
+                        heatmap-weeks: root.heatmap-weeks;
+                        contributors: root.contributors;
+                        hotspots: root.hotspots;
+                        churn-chart-image: root.churn-chart-image;
+                        churn-monthly-mode: root.churn-monthly-mode;
+                        filter-by-date(date-iso) => {
+                            root.filter-by-date(date-iso);
+                        }
+                        filter-by-author(author) => {
+                            root.filter-by-author(author);
+                        }
+                        inspect-file-blame(path) => {
+                            root.inspect-file-blame(path);
+                        }
+                        select-churn-granularity(monthly) => {
+                            root.churn-monthly-mode = monthly;
+                            root.select-churn-granularity(monthly);
+                        }
+                    }
+
+                    if root.active-view == 1 : CommitsDiffView {
+                        width: 100%;
+                        height: 100%;
+                        commits: root.commits;
+                        selected-commit-oid: root.selected-commit-oid;
+                        selected-commit-summary: root.selected-commit-summary;
+                        selected-commit-author: root.selected-commit-author;
+                        selected-commit-date: root.selected-commit-date;
+                        changed-files: root.changed-files;
+                        selected-diff-file: root.selected-diff-file;
+                        diff-rows: root.diff-rows;
+                        is-split-diff: root.is-split-diff;
+                        search-query <=> root.commit-search-query;
+                        filter-commits(query) => {
+                            root.filter-commits(query);
+                        }
+                        select-commit(oid) => {
+                            root.select-commit(oid);
+                        }
+                        select-changed-file(path) => {
+                            root.select-changed-file(path);
+                        }
+                        toggle-diff-mode(split) => {
+                            root.is-split-diff = split;
+                            root.toggle-diff-mode(split);
+                        }
+                        inspect-file-blame(path) => {
+                            root.inspect-file-blame(path);
+                        }
+                    }
+
+                    if root.active-view == 2 : FilesBlameView {
+                        width: 100%;
+                        height: 100%;
+                        tree-entries: root.tree-entries;
+                        selected-tree-file: root.selected-tree-file;
+                        blame-rows: root.blame-rows;
+                        show-blame-gutter: root.show-blame-gutter;
+                        file-filter-query <=> root.file-filter-query;
+                        filter-tree-files(query) => {
+                            root.filter-tree-files(query);
+                        }
+                        select-tree-file(path) => {
+                            root.select-tree-file(path);
+                        }
+                        toggle-blame-mode(show-blame) => {
+                            root.show-blame-gutter = show-blame;
+                            root.toggle-blame-mode(show-blame);
+                        }
+                        jump-to-commit(oid) => {
+                            root.jump-to-commit(oid);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

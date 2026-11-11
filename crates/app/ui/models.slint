@@ -1,0 +1,95 @@
+export struct UiTokenSpan {
+    text: string,
+    color: color,
+}
+
+export struct UiDiffRow {
+    old-line: string,
+    new-line: string,
+    kind: int,
+    unified-spans: [UiTokenSpan],
+    left-line: string,
+    left-kind: int,
+    left-spans: [UiTokenSpan],
+    right-line: string,
+    right-kind: int,
+    right-spans: [UiTokenSpan],
+}
+
+export struct UiCommitRow {
+    oid-hex: string,
+    short-oid: string,
+    summary: string,
+    author-name: string,
+    date-iso: string,
+    insertions: int,
+    deletions: int,
+    files-changed: int,
+    churn-indexed: bool,
+}
+
+export struct UiChangedFileRow {
+    path: string,
+    display-path: string,
+    status: string,
+    insertions: int,
+    deletions: int,
+}
+
+export struct UiLanguageRow {
+    language: string,
+    files: int,
+    code: int,
+    comments: int,
+    blanks: int,
+    percentage-text: string,
+    ratio: float,
+    color: color,
+}
+
+export struct UiContributorRow {
+    name: string,
+    email: string,
+    commits: int,
+    insertions: int,
+    deletions: int,
+    active-range: string,
+}
+
+export struct UiHotspotRow {
+    path: string,
+    language: string,
+    touches: int,
+    insertions: int,
+    deletions: int,
+    total-churn: int,
+}
+
+export struct UiHeatmapDay {
+    date-iso: string,
+    commit-count: int,
+    intensity: int,
+}
+
+export struct UiHeatmapWeek {
+    week-label: string,
+    days: [UiHeatmapDay],
+}
+
+export struct UiTreeEntryRow {
+    path: string,
+    file-name: string,
+    depth: int,
+    language: string,
+    size-text: string,
+}
+
+export struct UiBlameRow {
+    line-no: string,
+    commit-oid-hex: string,
+    short-oid: string,
+    author-name: string,
+    date-iso: string,
+    is-hunk-start: bool,
+    spans: [UiTokenSpan],
+}
