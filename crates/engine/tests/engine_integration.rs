@@ -102,9 +102,10 @@ fn syntax_highlighter_coalesces_adjacent_tokens_and_enforces_guardrails() {
     assert_eq!(long_highlighted[0][0].color, COLOR_DEFAULT);
 
     // Verify 1 MB blob guardrail bypasses AST highlighting
-    let huge_blob: String = "fn a() {}\n".repeat((MAX_HIGHLIGHT_BLOB_BYTES / 10) + 10);
+    let huge_line_count: usize = (MAX_HIGHLIGHT_BLOB_BYTES / 10) + 10;
+    let huge_blob: String = "fn a() {}\n".repeat(huge_line_count);
     let huge_lines: Vec<Vec<CodeTokenSpan>> = highlight_blob_lines("src/lib.rs", &huge_blob);
-    assert!(!huge_lines.is_empty());
+    assert_eq!(huge_lines.len(), huge_line_count);
     assert_eq!(huge_lines[0].len(), 1);
     assert_eq!(huge_lines[0][0].color, COLOR_DEFAULT);
 }
@@ -152,11 +153,10 @@ fn end_to_end_progressive_indexing_diff_blame_and_redb_cache_hits() {
     let progress: ChurnBatchProgress = final_progress.expect("Phase 2 must emit progress");
     assert!(progress.is_complete);
     assert_eq!(progress.indexed_commits, 2);
-    assert!(!progress.hotspots.is_empty());
     assert_eq!(progress.hotspots[0].path, "src/lib.rs");
     assert_eq!(progress.hotspots[0].touches, 2);
-    assert!(!progress.weekly_churn.is_empty());
-    assert!(!progress.monthly_churn.is_empty());
+    assert!(progress.weekly_churn.iter().any(|bucket| bucket.commits > 0));
+    assert!(progress.monthly_churn.iter().any(|bucket| bucket.commits > 0));
 
     // Re-run Phase 1 and confirm 100% redb OID Cache hit
     let snapshot2: Phase1Snapshot = run_phase1(&repo_dir, None, &cache, &cancel_flag).unwrap();
@@ -169,7 +169,6 @@ fn end_to_end_progressive_indexing_diff_blame_and_redb_cache_hits() {
     assert_eq!(changed_files.len(), 2);
 
     let diff_rows: Vec<DiffLineRow> = load_commit_file_diff(&repo_dir, head_commit_oid, "src/lib.rs").unwrap();
-    assert!(!diff_rows.is_empty());
     assert!(diff_rows.iter().any(|r| r.kind == DiffLineKind::HunkHeader));
     assert!(diff_rows.iter().any(|r| r.kind == DiffLineKind::Removed));
     assert!(diff_rows.iter().any(|r| r.kind == DiffLineKind::Added));
