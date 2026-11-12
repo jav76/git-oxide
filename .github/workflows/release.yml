@@ -1,0 +1,275 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release git tag to build and publish (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_DEB_VERSION: 3.8.0
+  CARGO_GENERATE_RPM_VERSION: 0.16.0
+  CARGO_XWIN_VERSION: 0.23.1
+
+# Every release target is built inside `debian:bookworm`: arm64 Linux cross-links against Debian's
+# multiarch libraries (glibc 2.36 floor), Linux packages use cargo-deb and cargo-generate-rpm, and
+# Windows x64/arm64 binaries are cross-compiled with cargo-xwin (+ x64 .msi via wixl).
+jobs:
+  create:
+    name: Prepare and create draft release
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["ubuntu-latest"]') }}
+    container: debian:bookworm
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git gh
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Validate tag against Cargo.toml and CHANGELOG.md
+        id: meta
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+
+          semver_regex="^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$"
+          if [[ ! "$tag" =~ $semver_regex ]]; then
+            echo "::error::Invalid SemVer release tag '$tag'. Expected format like v0.1.0 or v0.1.0-rc.1."
+            exit 1
+          fi
+
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          if [ "v$version" != "$tag" ]; then
+            echo "::error::Tag $tag does not match Cargo.toml version $version."
+            exit 1
+          fi
+
+          grep -q "^## \[$version\]" CHANGELOG.md || {
+            echo "::error::CHANGELOG.md has no '## [$version]' section."
+            exit 1
+          }
+
+          awk -v heading="## [$version]" '
+            index($0, heading) == 1 { active = 1; next }
+            /^## / { active = 0 }
+            active { print }
+          ' CHANGELOG.md > notes.md
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          prerelease=""
+          case "$TAG" in *-*) prerelease="--prerelease" ;; esac
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --draft $prerelease --verify-tag \
+                 --title "$TAG" --notes-file notes.md
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: create
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+            rpm_arch: x86_64
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+            rpm_arch: aarch64
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["ubuntu-latest"]') }}
+    container: debian:bookworm
+    env:
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      PKG_CONFIG_ALLOW_CROSS: 1
+      PKG_CONFIG_LIBDIR_aarch64_unknown_linux_gnu: /usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config libfontconfig1-dev dpkg-dev rpm gh
+
+      - name: Install arm64 cross toolchain
+        if: matrix.arch == 'arm64'
+        run: |
+          dpkg --add-architecture arm64
+          apt-get update
+          apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross libfontconfig1-dev:arm64
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.create.outputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build -p git-oxide --release --locked --target ${{ matrix.target }}
+
+      - name: Package .deb, .rpm, and .tar.gz
+        env:
+          TAG: ${{ needs.create.outputs.tag }}
+          VERSION: ${{ needs.create.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/dist
+
+          cargo install cargo-deb --version "$CARGO_DEB_VERSION" --locked
+          cargo deb -p git-oxide --no-build --target ${{ matrix.target }} --output target/dist/
+
+          # A pre-release suffix must sort below the final version in apt: 0.2.0~beta.1-1 < 0.2.0-1.
+          expected_deb_ver="$(printf '%s' "$VERSION" | tr - '~')-1"
+          actual_deb_ver="$(dpkg-deb -f target/dist/*.deb Version)"
+          if [ "$actual_deb_ver" != "$expected_deb_ver" ]; then
+            echo "::error::Expected .deb version $expected_deb_ver, got $actual_deb_ver."
+            exit 1
+          fi
+
+          cargo install cargo-generate-rpm --version "$CARGO_GENERATE_RPM_VERSION" --locked
+          cargo generate-rpm -p crates/app --target ${{ matrix.target }} --arch ${{ matrix.rpm_arch }} --output target/dist/
+
+          staging="git-oxide-${TAG}-linux-${{ matrix.arch }}"
+          mkdir -p "target/dist/$staging"
+          cp "target/${{ matrix.target }}/release/git-oxide" \
+            packaging/linux/io.github.jav76.GitOxide.desktop \
+            packaging/linux/io.github.jav76.GitOxide.svg \
+            README.md LICENSE "target/dist/$staging/"
+          tar -C target/dist -czf "target/dist/$staging.tar.gz" "$staging"
+
+      - name: Upload Linux packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.create.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          gh release upload "$TAG" target/dist/*.deb target/dist/*.rpm target/dist/*.tar.gz --clobber
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    needs: create
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+            xwin_arch: x86_64
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+            xwin_arch: aarch64
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["ubuntu-latest"]') }}
+    container: debian:bookworm
+    env:
+      # cargo-xwin downloads the MSVC CRT and Windows SDK, accepting Microsoft's license:
+      # https://go.microsoft.com/fwlink/?LinkId=2086102
+      XWIN_ARCH: ${{ matrix.xwin_arch }}
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential clang lld llvm zip wixl gh
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.create.outputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Install cargo-xwin
+        run: cargo install cargo-xwin --version "$CARGO_XWIN_VERSION" --locked
+
+      - name: Build static-CRT Windows binary
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo xwin build -p git-oxide --release --locked --target ${{ matrix.target }}
+
+      - name: Package standalone .zip and Windows Installer .msi
+        env:
+          TAG: ${{ needs.create.outputs.tag }}
+          VERSION: ${{ needs.create.outputs.version }}
+        run: |
+          set -euo pipefail
+          staging="git-oxide-${TAG}-windows-${{ matrix.arch }}"
+          mkdir -p "target/dist/$staging"
+          cp "target/${{ matrix.target }}/release/git-oxide.exe" README.md LICENSE "target/dist/$staging/"
+          (cd target/dist && zip -r "$staging.zip" "$staging")
+
+          if [ "${{ matrix.arch }}" = "x64" ]; then
+            msi_version="${VERSION%%-*}"
+            (
+              cd "target/dist/$staging"
+              wixl -a x64 \
+                -D "Version=$msi_version" \
+                -D "BinaryPath=git-oxide.exe" \
+                -D "ReadmePath=README.md" \
+                -D "LicensePath=LICENSE" \
+                -o "../${staging}.msi" \
+                "$GITHUB_WORKSPACE/packaging/windows/git-oxide.wxs"
+            )
+          fi
+
+      - name: Upload Windows packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.create.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          shopt -s nullglob
+          assets=(target/dist/*.zip target/dist/*.msi)
+          gh release upload "$TAG" "${assets[@]}" --clobber
+
+  publish:
+    name: Checksums and publish
+    needs: [create, linux, windows]
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["ubuntu-latest"]') }}
+    container: debian:bookworm
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.create.outputs.tag }}
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates gh
+
+      - name: Generate SHA256SUMS and publish release
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          cd assets
+          gh release download "$TAG"
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS --clobber
+          gh release edit "$TAG" --draft=false

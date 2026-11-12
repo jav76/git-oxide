@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=git-oxide
+Comment=Fast pure-Rust Git repository analytics, diff, and blame viewer
+Exec=git-oxide %F
+Icon=io.github.jav76.GitOxide
+Terminal=false
+Categories=Development;RevisionControl;
+StartupNotify=true

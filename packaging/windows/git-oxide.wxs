@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+    Id="*"
+    Name="git-oxide"
+    Manufacturer="Jaret Varn"
+    Version="$(var.Version)"
+    Language="1033"
+    UpgradeCode="4B9E3A6C-7F2D-4C81-9A4E-2D5B8E1C3F90">
+    <Package
+      InstallerVersion="200"
+      Compressed="yes"
+      InstallScope="perMachine"
+      Description="High-performance pure-Rust Git repository analytics, diff, and blame viewer"
+      Comments="Installed via git-oxide Windows Installer"/>
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of git-oxide is already installed."/>
+    <Media Id="1" Cabinet="gitoxide.cab" EmbedCab="yes"/>
+
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/jav76/git-oxide"/>
+    <Property Id="ARPNOREPAIR" Value="1"/>
+    <Property Id="ARPNOMODIFY" Value="1"/>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="git-oxide">
+          <Component Id="MainExecutable" Guid="8E3D51A4-2B67-49D1-B4E2-7C8A9F01D345" Win64="yes">
+            <File Id="GitOxideExe" Name="git-oxide.exe" Source="$(var.BinaryPath)" KeyPath="yes"/>
+          </Component>
+          <Component Id="Documentation" Guid="1A7C84E2-9F31-4E56-A123-6B8C9D0E4F12" Win64="yes">
+            <File Id="ReadmeMd" Name="README.md" Source="$(var.ReadmePath)" KeyPath="yes"/>
+            <File Id="LicenseFile" Name="LICENSE" Source="$(var.LicensePath)"/>
+          </Component>
+          <Component Id="InstallLocationRegistry" Guid="9F2E4B7A-3C81-4D90-8E25-1B4C7D9A6E31" Win64="yes">
+            <RegistryValue
+              Root="HKLM"
+              Key="Software\git-oxide"
+              Name="InstallPath"
+              Type="string"
+              Value="[INSTALLDIR]"
+              KeyPath="yes"/>
+          </Component>
+        </Directory>
+      </Directory>
+
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="git-oxide">
+          <Component Id="ApplicationShortcut" Guid="6D4B2A8F-5E19-4B32-9C74-8A1F3E5D2B60">
+            <Shortcut
+              Id="StartMenuShortcut"
+              Name="git-oxide"
+              Description="Git repository analytics, AST diff viewer, and blame inspector"
+              Target="[INSTALLDIR]git-oxide.exe"
+              WorkingDirectory="INSTALLDIR"/>
+            <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall"/>
+            <RegistryValue
+              Root="HKCU"
+              Key="Software\git-oxide"
+              Name="installed"
+              Type="integer"
+              Value="1"
+              KeyPath="yes"/>
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="DefaultFeature" Level="1">
+      <ComponentRef Id="MainExecutable"/>
+      <ComponentRef Id="Documentation"/>
+      <ComponentRef Id="InstallLocationRegistry"/>
+      <ComponentRef Id="ApplicationShortcut"/>
+    </Feature>
+  </Product>
+</Wix>

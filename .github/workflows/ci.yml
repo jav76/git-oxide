@@ -12,25 +12,28 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTDOCFLAGS: -D warnings
 
 jobs:
   check:
-    name: fmt, clippy, test
-    runs-on: ubuntu-latest
+    name: fmt, clippy, test, doc
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["ubuntu-latest"]') }}
+    # Release binaries are built in bookworm too, so its glibc (2.36) is the minimum supported.
+    container: debian:bookworm
     steps:
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config libfontconfig1-dev
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config libfontconfig1-dev
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Changelog has a section for the Cargo version
         run: |
@@ -48,3 +51,6 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+      - name: Rustdoc
+        run: cargo doc --workspace --no-deps --locked

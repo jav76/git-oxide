@@ -1,5 +1,6 @@
 [package]
 name = "git-oxide"
+description = "High-performance pure-Rust Git repository analytics, AST-highlighted diff viewer, and blame inspector."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -23,3 +24,50 @@ slint.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.{ archive-format }"
+bin-dir = "{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-linux-amd64.tar.gz"
+pkg-fmt = "tgz"
+bin-dir = "{ name }-v{ version }-linux-amd64/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-linux-arm64.tar.gz"
+pkg-fmt = "tgz"
+bin-dir = "{ name }-v{ version }-linux-arm64/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-windows-x64.zip"
+pkg-fmt = "zip"
+bin-dir = "{ name }-v{ version }-windows-x64/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-windows-arm64.zip"
+pkg-fmt = "zip"
+bin-dir = "{ name }-v{ version }-windows-arm64/{ bin }{ binary-ext }"
+
+[package.metadata.deb]
+name = "git-oxide"
+section = "vcs"
+priority = "optional"
+depends = "$auto"
+extended-description = """\
+High-performance, strictly read-only desktop Git analytics, AST-highlighted diff viewer, \
+and blame inspector built in pure Rust with Slint UI and Gitoxide."""
+assets = [
+    ["target/release/git-oxide", "usr/bin/", "755"],
+    ["../../packaging/linux/io.github.jav76.GitOxide.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/linux/io.github.jav76.GitOxide.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["../../README.md", "usr/share/doc/git-oxide/", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/git-oxide", dest = "/usr/bin/git-oxide", mode = "0755" },
+    { source = "packaging/linux/io.github.jav76.GitOxide.desktop", dest = "/usr/share/applications/io.github.jav76.GitOxide.desktop", mode = "0644" },
+    { source = "packaging/linux/io.github.jav76.GitOxide.svg", dest = "/usr/share/icons/hicolor/scalable/apps/io.github.jav76.GitOxide.svg", mode = "0644" },
+    { source = "README.md", dest = "/usr/share/doc/git-oxide/README.md", mode = "0644" },
+]

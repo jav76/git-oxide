@@ -73,12 +73,7 @@ fn lock_state(state: &Arc<Mutex<ControllerState>>) -> std::sync::MutexGuard<'_, 
 /// Wires all `AppWindow` callbacks to background `git-oxide-engine` workers.
 ///
 /// Must be called on the Slint UI thread.
-pub fn attach_controller(
-    window: &AppWindow,
-    cache: OidCache,
-    initial_repo_path: PathBuf,
-    initial_ref: Option<String>,
-) {
+pub fn attach_controller(window: &AppWindow, cache: OidCache, initial_repo_path: PathBuf, initial_ref: Option<String>) {
     let state: Arc<Mutex<ControllerState>> = Arc::new(Mutex::new(ControllerState {
         repo_path: initial_repo_path.clone(),
         active_ref_name: String::new(),
