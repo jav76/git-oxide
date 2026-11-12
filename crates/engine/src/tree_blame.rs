@@ -1,12 +1,15 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use chrono::{DateTime, Utc};
 use gix::ObjectId;
+use gix::objs::TreeRefIter;
 use gix::objs::tree::EntryKind;
+use rayon::prelude::*;
 use tokei::{Config as TokeiConfig, LanguageType};
 
-use crate::diff::{find_blob_in_tree_by_path, is_blob_entry, parse_oid_hex, read_blob_bytes, read_tree_entries_map};
+use crate::diff::{find_blob_in_tree_by_path, is_blob_entry, parse_oid_hex, read_blob_bytes};
 use crate::error::EngineError;
 use crate::models::{BlameLineRow, CodeTokenSpan, RgbaColor, TreeEntryItem};
 use crate::syntax::{COLOR_COMMENT, COLOR_DEFAULT, highlight_blob_lines};
@@ -14,10 +17,11 @@ use crate::syntax::{COLOR_COMMENT, COLOR_DEFAULT, highlight_blob_lines};
 /// Length of abbreviated commit SHA strings displayed in UI tables and blame gutters.
 pub const SHORT_OID_LEN: usize = 7;
 
+pub(crate) static TOKEI_CONFIG: LazyLock<TokeiConfig> = LazyLock::new(TokeiConfig::default);
+
 /// Classifies a file path into a human-readable programming language name using `tokei`.
 pub fn classify_language_name(file_path: &str) -> String {
-    let config: TokeiConfig = TokeiConfig::default();
-    LanguageType::from_path(Path::new(file_path), &config)
+    LanguageType::from_path(Path::new(file_path), &TOKEI_CONFIG)
         .map_or_else(|| "Other".to_owned(), |lang| lang.name().to_owned())
 }
 
@@ -50,6 +54,15 @@ pub fn format_date_iso(timestamp_secs: i64) -> String {
 
 /// Lists all tracked blob files in the commit tree at `commit_oid_hex` in sorted path order.
 pub fn list_tree_entries(repo: &gix::Repository, commit_oid_hex: &str) -> Result<Vec<TreeEntryItem>, EngineError> {
+    list_tree_entries_with_options(repo, commit_oid_hex, false)
+}
+
+/// Lists all tracked blob files in the commit tree at `commit_oid_hex`, optionally skipping header size lookups.
+pub fn list_tree_entries_with_options(
+    repo: &gix::Repository,
+    commit_oid_hex: &str,
+    include_sizes: bool,
+) -> Result<Vec<TreeEntryItem>, EngineError> {
     let commit_oid: ObjectId = parse_oid_hex(commit_oid_hex)?;
     let commit = repo
         .find_object(commit_oid)
@@ -61,8 +74,56 @@ pub fn list_tree_entries(repo: &gix::Repository, commit_oid_hex: &str) -> Result
         .map_err(|error| EngineError::GitOperation(format!("failed to read root tree id: {error}")))?
         .detach();
 
+    let root_obj = repo
+        .find_object(root_tree_oid)
+        .map_err(|error| EngineError::GitOperation(format!("failed to find tree {root_tree_oid}: {error}")))?;
+    let root_bytes: Vec<u8> = root_obj.data.clone();
+
     let mut items: Vec<TreeEntryItem> = Vec::new();
-    collect_tree_items_recursive(repo, root_tree_oid, "", 0, &mut items)?;
+    let mut top_subdirs: Vec<(String, ObjectId)> = Vec::new();
+
+    for entry_result in TreeRefIter::from_bytes(&root_bytes) {
+        let entry = entry_result
+            .map_err(|error| EngineError::GitOperation(format!("corrupt tree entry in {root_tree_oid}: {error}")))?;
+        let kind: EntryKind = entry.mode.kind();
+        let name: String = String::from_utf8_lossy(entry.filename).into_owned();
+        let oid: ObjectId = entry.oid.to_owned();
+
+        if kind == EntryKind::Tree {
+            top_subdirs.push((name, oid));
+        } else if is_blob_entry(kind) {
+            let size_bytes: u64 = if include_sizes { repo.find_header(oid).map_or(0, |h| h.size()) } else { 0 };
+            let language: String = classify_language_name(&name);
+            items.push(TreeEntryItem {
+                path: name.clone(),
+                file_name: name,
+                depth: 0,
+                language,
+                size_bytes,
+                blob_oid_hex: oid.to_hex().to_string(),
+            });
+        }
+    }
+
+    if !top_subdirs.is_empty() {
+        let shared_repo: gix::ThreadSafeRepository = repo.clone().into_sync();
+        let subdir_batches: Vec<Vec<TreeEntryItem>> = top_subdirs
+            .par_iter()
+            .map(|(dir_name, dir_oid)| {
+                let mut local_repo: gix::Repository = shared_repo.to_thread_local();
+                local_repo.object_cache_size_if_unset(16 * 1024 * 1024);
+                let mut sub_items: Vec<TreeEntryItem> = Vec::new();
+                let _ = collect_tree_items_recursive(&local_repo, *dir_oid, dir_name, 1, include_sizes, &mut sub_items);
+                sub_items
+            })
+            .collect();
+
+        for batch in subdir_batches {
+            items.extend(batch);
+        }
+    }
+
+    items.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     Ok(items)
 }
 
@@ -71,20 +132,34 @@ fn collect_tree_items_recursive(
     tree_oid: ObjectId,
     prefix: &str,
     depth: u32,
+    include_sizes: bool,
     items: &mut Vec<TreeEntryItem>,
 ) -> Result<(), EngineError> {
-    let entries: BTreeMap<String, (EntryKind, ObjectId)> = read_tree_entries_map(repo, tree_oid)?;
-    for (name, (kind, oid)) in entries {
-        let full_path: String = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+    let object = repo
+        .find_object(tree_oid)
+        .map_err(|error| EngineError::GitOperation(format!("failed to find tree {tree_oid}: {error}")))?;
+    let tree_bytes: Vec<u8> = object.data.clone();
+
+    for entry_result in TreeRefIter::from_bytes(&tree_bytes) {
+        let entry = entry_result
+            .map_err(|error| EngineError::GitOperation(format!("corrupt tree entry in {tree_oid}: {error}")))?;
+        let kind: EntryKind = entry.mode.kind();
+        if kind != EntryKind::Tree && !is_blob_entry(kind) {
+            continue;
+        }
+
+        let name: &str = std::str::from_utf8(entry.filename).unwrap_or("");
+        let full_path: String = if prefix.is_empty() { name.to_owned() } else { format!("{prefix}/{name}") };
+        let oid: ObjectId = entry.oid.to_owned();
 
         if kind == EntryKind::Tree {
-            collect_tree_items_recursive(repo, oid, &full_path, depth + 1, items)?;
-        } else if is_blob_entry(kind) {
-            let size_bytes: u64 = repo.find_header(oid).map_or(0, |header| header.size());
+            collect_tree_items_recursive(repo, oid, &full_path, depth + 1, include_sizes, items)?;
+        } else {
+            let size_bytes: u64 = if include_sizes { repo.find_header(oid).map_or(0, |h| h.size()) } else { 0 };
             let language: String = classify_language_name(&full_path);
             items.push(TreeEntryItem {
                 path: full_path,
-                file_name: name,
+                file_name: name.to_owned(),
                 depth,
                 language,
                 size_bytes,

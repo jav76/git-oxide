@@ -42,7 +42,12 @@ export struct UiLanguageRow {
     code: int,
     comments: int,
     blanks: int,
+    files-text: string,
+    code-text: string,
+    comments-text: string,
+    blanks-text: string,
     percentage-text: string,
+    share-fraction: float,
     ratio: float,
     color: color,
 }
@@ -53,6 +58,9 @@ export struct UiContributorRow {
     commits: int,
     insertions: int,
     deletions: int,
+    commits-text: string,
+    insertions-text: string,
+    deletions-text: string,
     active-range: string,
 }
 
@@ -63,6 +71,10 @@ export struct UiHotspotRow {
     insertions: int,
     deletions: int,
     total-churn: int,
+    touches-text: string,
+    insertions-text: string,
+    deletions-text: string,
+    total-churn-text: string,
 }
 
 export struct UiHeatmapDay {

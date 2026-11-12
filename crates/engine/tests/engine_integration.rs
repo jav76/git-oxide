@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use git_oxide_engine::cache::OidCache;
 use git_oxide_engine::indexer::{run_phase1, run_phase2_churn};
@@ -236,4 +237,70 @@ fn end_to_end_progressive_indexing_diff_blame_and_redb_cache_hits() {
     let rename_diff: Vec<DiffLineRow> = load_commit_file_diff(&repo_dir, rename_commit_oid, "tools/helper.py").unwrap();
     assert!(rename_diff.iter().any(|r| r.kind == DiffLineKind::Removed));
     assert!(rename_diff.iter().any(|r| r.kind == DiffLineKind::Added));
+}
+
+#[test]
+#[ignore = "local benchmark requiring /home/jaret/Documents/GitHub/linux"]
+#[expect(clippy::print_stdout, reason = "benchmark test outputs timing metrics to stdout")]
+fn linux_kernel_benchmark_phase1_and_phase2_throughput() {
+    let linux_dir: &Path = Path::new("/home/jaret/Documents/GitHub/linux");
+    if !linux_dir.exists() {
+        return;
+    }
+
+    let temp_dir: TempDir = TempDir::new().unwrap();
+    let cache_path = temp_dir.path().join("linux_bench_cache.redb");
+    let cache: OidCache = OidCache::open_at(&cache_path).unwrap();
+    let cancel_flag: AtomicBool = AtomicBool::new(false);
+
+    let t0: Instant = Instant::now();
+    let snapshot_cold: Phase1Snapshot = run_phase1(linux_dir, Some("origin/master"), &cache, &cancel_flag).unwrap();
+    let cold_p1_elapsed = t0.elapsed();
+
+    let total_files: u32 = snapshot_cold.languages.iter().map(|l| l.files).sum();
+    let total_code: u64 = snapshot_cold.languages.iter().map(|l| l.code).sum();
+    println!(
+        "[LINUX BENCHMARK] Phase 1 (cold cache): {:.2}s | commits={} | contributors={} | files={} | code_lines={} | languages={}",
+        cold_p1_elapsed.as_secs_f64(),
+        snapshot_cold.total_commits,
+        snapshot_cold.contributors.len(),
+        total_files,
+        total_code,
+        snapshot_cold.languages.len(),
+    );
+    assert!(snapshot_cold.total_commits > 400_000);
+    assert!(total_files > 80_000);
+    assert!(total_code > 30_000_000);
+
+    let t1: Instant = Instant::now();
+    let snapshot_warm: Phase1Snapshot = run_phase1(linux_dir, Some("origin/master"), &cache, &cancel_flag).unwrap();
+    let warm_p1_elapsed = t1.elapsed();
+    println!(
+        "[LINUX BENCHMARK] Phase 1 (warm blob cache): {:.2}s | commits={}",
+        warm_p1_elapsed.as_secs_f64(),
+        snapshot_warm.total_commits,
+    );
+
+    // Measure Phase 2 churn throughput over 3 batches (6,000 commits)
+    let p2_cancel: AtomicBool = AtomicBool::new(false);
+    let t2: Instant = Instant::now();
+    let mut batches_seen: u32 = 0;
+    let mut commits_indexed: u32 = 0;
+    let _ = run_phase2_churn(linux_dir, &snapshot_warm, &cache, &p2_cancel, |progress| {
+        batches_seen += 1;
+        commits_indexed = progress.indexed_commits;
+        let elapsed = t2.elapsed().as_secs_f64();
+        let rate: f64 = f64::from(commits_indexed) / elapsed.max(0.001);
+        println!(
+            "[LINUX BENCHMARK] Phase 2 Batch #{batches_seen}: indexed={commits_indexed}/{} ({:.2}s, {:.0} commits/sec) | hotspots={}",
+            progress.total_commits,
+            elapsed,
+            rate,
+            progress.hotspots.len(),
+        );
+        if batches_seen >= 3 {
+            p2_cancel.store(true, Ordering::Relaxed);
+        }
+    });
+    assert!(commits_indexed >= 6_000);
 }

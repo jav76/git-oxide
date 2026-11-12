@@ -75,11 +75,12 @@ impl OidCache {
         &self.path
     }
 
-    /// Looks up cached `CommitChurnStats` for a batch of 20-byte commit OIDs in one read transaction.
-    pub fn get_commit_churn_batch(
-        &self,
-        oids: &[[u8; OID_BYTE_LEN]],
-    ) -> Result<HashMap<[u8; OID_BYTE_LEN], CommitChurnStats>, EngineError> {
+    /// Streams cached `CommitChurnStats` entries for `oids` in one read transaction without
+    /// retaining all decoded `touched_paths` vectors in memory simultaneously.
+    pub fn scan_commit_churn_batch<F>(&self, oids: &[[u8; OID_BYTE_LEN]], mut on_hit: F) -> Result<usize, EngineError>
+    where
+        F: FnMut(usize, CommitChurnStats),
+    {
         let read_txn = self
             .db
             .begin_read()
@@ -88,10 +89,10 @@ impl OidCache {
             .open_table(COMMIT_CHURN_TABLE)
             .map_err(|error| EngineError::CacheError(format!("failed to open commit churn table: {error}")))?;
 
-        let mut results: HashMap<[u8; OID_BYTE_LEN], CommitChurnStats> = HashMap::with_capacity(oids.len());
         let config = bincode::config::standard();
+        let mut hits: usize = 0;
 
-        for oid in oids {
+        for (idx, oid) in oids.iter().enumerate() {
             if let Some(guard) = table
                 .get(oid)
                 .map_err(|error| EngineError::CacheError(format!("failed to read commit churn entry: {error}")))?
@@ -101,10 +102,23 @@ impl OidCache {
                     .map_err(|error| {
                         EngineError::SerializationError(format!("failed to decode commit churn entry: {error}"))
                     })?;
-                results.insert(*oid, decoded);
+                on_hit(idx, decoded);
+                hits += 1;
             }
         }
 
+        Ok(hits)
+    }
+
+    /// Looks up cached `CommitChurnStats` for a batch of 20-byte commit OIDs in one read transaction.
+    pub fn get_commit_churn_batch(
+        &self,
+        oids: &[[u8; OID_BYTE_LEN]],
+    ) -> Result<HashMap<[u8; OID_BYTE_LEN], CommitChurnStats>, EngineError> {
+        let mut results: HashMap<[u8; OID_BYTE_LEN], CommitChurnStats> = HashMap::new();
+        self.scan_commit_churn_batch(oids, |idx, decoded| {
+            results.insert(oids[idx], decoded);
+        })?;
         Ok(results)
     }
 

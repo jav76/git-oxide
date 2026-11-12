@@ -49,6 +49,9 @@ export component AppWindow inherits Window {
     in property <string> total-code-lines-text: "0";
     in property <[UiLanguageRow]> languages: [];
     in property <[UiHeatmapWeek]> heatmap-weeks: [];
+    in property <string> heatmap-total-commits-text: "0";
+    in property <string> heatmap-active-days-text: "0 / 364 days";
+    in property <string> heatmap-peak-day-text: "None";
     in property <[UiContributorRow]> contributors: [];
     in property <[UiHotspotRow]> hotspots: [];
     in property <image> churn-chart-image;
@@ -170,6 +173,9 @@ export component AppWindow inherits Window {
                         total-code-lines-text: root.total-code-lines-text;
                         languages: root.languages;
                         heatmap-weeks: root.heatmap-weeks;
+                        heatmap-total-commits-text: root.heatmap-total-commits-text;
+                        heatmap-active-days-text: root.heatmap-active-days-text;
+                        heatmap-peak-day-text: root.heatmap-peak-day-text;
                         contributors: root.contributors;
                         hotspots: root.hotspots;
                         churn-chart-image: root.churn-chart-image;

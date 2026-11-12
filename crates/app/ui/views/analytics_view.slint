@@ -12,14 +12,17 @@ component MetricCard inherits Rectangle {
     in property <string> value;
     in property <string> subtitle;
 
-    height: 76px;
+    height: 86px;
     border-radius: 6px;
     background: Theme.bg-surface;
     border-width: 1px;
     border-color: Theme.border-subtle;
 
     VerticalLayout {
-        padding: 12px;
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 10px;
+        padding-bottom: 10px;
         spacing: 4px;
         alignment: center;
 
@@ -27,6 +30,7 @@ component MetricCard inherits Rectangle {
             text: root.title;
             color: Theme.text-secondary;
             font-size: 11px;
+            vertical-alignment: center;
         }
 
         Text {
@@ -35,12 +39,14 @@ component MetricCard inherits Rectangle {
             font-family: Theme.font-mono;
             font-size: 20px;
             font-weight: 700;
+            vertical-alignment: center;
         }
 
         Text {
             text: root.subtitle;
             color: Theme.text-muted;
-            font-size: 10px;
+            font-size: 11px;
+            vertical-alignment: center;
         }
     }
 }
@@ -52,11 +58,20 @@ export component AnalyticsView inherits Rectangle {
     in property <string> total-code-lines-text: "0";
     in property <[UiLanguageRow]> languages: [];
     in property <[UiHeatmapWeek]> heatmap-weeks: [];
+    in property <string> heatmap-total-commits-text: "0";
+    in property <string> heatmap-active-days-text: "0 / 364 days";
+    in property <string> heatmap-peak-day-text: "None";
     in property <[UiContributorRow]> contributors: [];
     in property <[UiHotspotRow]> hotspots: [];
     in property <image> churn-chart-image;
     in property <bool> churn-monthly-mode: false;
+
     private property <string> hovered-heatmap-label: "Click any active day to inspect commits";
+    private property <bool> collapsed-languages: false;
+    private property <bool> show-all-languages: false;
+    private property <bool> collapsed-heatmap: false;
+    private property <bool> collapsed-churn: false;
+    private property <bool> collapsed-leaderboards: false;
 
     callback filter-by-date(string);
     callback filter-by-author(string);
@@ -68,8 +83,9 @@ export component AnalyticsView inherits Rectangle {
     ScrollView {
         VerticalLayout {
             padding: 16px;
-            spacing: 14px;
+            spacing: 12px;
 
+            // Row 1: Top Summary Metric Cards + Quick Collapse Controls
             HorizontalLayout {
                 spacing: 12px;
 
@@ -102,159 +118,87 @@ export component AnalyticsView inherits Rectangle {
                 }
             }
 
-            // Panel 1: Language Breakdown
-            Rectangle {
-                border-radius: 6px;
-                background: Theme.bg-surface;
-                border-width: 1px;
-                border-color: Theme.border-subtle;
+            // Quick Layout Toolbar for Collapsible Analytics Regions
+            HorizontalLayout {
+                alignment: space-between;
+                height: 26px;
 
-                VerticalLayout {
-                    padding: 14px;
-                    spacing: 10px;
+                Text {
+                    text: "Analytics Regions (Click any section header to collapse or expand)";
+                    color: Theme.text-muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
 
-                    Text {
-                        text: "Language Breakdown (Ref Target)";
-                        color: Theme.text-primary;
-                        font-size: 13px;
-                        font-weight: 700;
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    Rectangle {
+                        width: 136px;
+                        height: 24px;
+                        border-radius: 4px;
+                        background: collapse-mid-touch.has-hover ? Theme.bg-hover : Theme.bg-surface;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
+                        accessible-role: button;
+                        accessible-label: "Toggle middle analytics grids";
+
+                        Text {
+                            text: (root.collapsed-languages && root.collapsed-heatmap && root.collapsed-churn)
+                                ? "Expand Middle Grids"
+                                : "Collapse Middle Grids";
+                            color: Theme.text-secondary;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        collapse-mid-touch := TouchArea {
+                            clicked => {
+                                if (root.collapsed-languages && root.collapsed-heatmap && root.collapsed-churn) {
+                                    root.collapsed-languages = false;
+                                    root.collapsed-heatmap = false;
+                                    root.collapsed-churn = false;
+                                } else {
+                                    root.collapsed-languages = true;
+                                    root.collapsed-heatmap = true;
+                                    root.collapsed-churn = true;
+                                }
+                            }
+                        }
                     }
 
                     Rectangle {
-                        height: 12px;
-                        border-radius: 6px;
-                        background: Theme.bg-elevated;
-                        clip: true;
+                        width: 96px;
+                        height: 24px;
+                        border-radius: 4px;
+                        background: expand-all-touch.has-hover ? Theme.bg-hover : Theme.bg-surface;
+                        border-width: 1px;
+                        border-color: Theme.border-subtle;
+                        accessible-role: button;
+                        accessible-label: "Expand all analytics sections";
 
-                        HorizontalLayout {
-                            spacing: 1px;
-                            for lang in root.languages : Rectangle {
-                                horizontal-stretch: lang.ratio;
-                                background: lang.color;
+                        Text {
+                            text: "Expand All";
+                            color: Theme.text-secondary;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        expand-all-touch := TouchArea {
+                            clicked => {
+                                root.collapsed-languages = false;
+                                root.collapsed-heatmap = false;
+                                root.collapsed-churn = false;
+                                root.collapsed-leaderboards = false;
                             }
-                        }
-                    }
-
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Text {
-                            width: 150px;
-                            text: "Language";
-                            color: Theme.text-secondary;
-                            font-size: 11px;
-                            font-weight: 700;
-                        }
-                        Text {
-                            width: 80px;
-                            text: "Files";
-                            color: Theme.text-secondary;
-                            font-size: 11px;
-                            font-weight: 700;
-                        }
-                        Text {
-                            width: 110px;
-                            text: "Code Lines";
-                            color: Theme.text-secondary;
-                            font-size: 11px;
-                            font-weight: 700;
-                        }
-                        Text {
-                            width: 110px;
-                            text: "Comments";
-                            color: Theme.text-secondary;
-                            font-size: 11px;
-                            font-weight: 700;
-                        }
-                        Text {
-                            width: 90px;
-                            text: "Blanks";
-                            color: Theme.text-secondary;
-                            font-size: 11px;
-                            font-weight: 700;
-                        }
-                        Text {
-                            width: 80px;
-                            text: "Share";
-                            color: Theme.text-secondary;
-                            font-size: 11px;
-                            font-weight: 700;
-                        }
-                    }
-
-                    for lang in root.languages : HorizontalLayout {
-                        spacing: 8px;
-                        height: 22px;
-
-                        HorizontalLayout {
-                            width: 150px;
-                            spacing: 6px;
-                            alignment: start;
-
-                            Rectangle {
-                                width: 10px;
-                                height: 10px;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: 5px;
-                                background: lang.color;
-                            }
-
-                            Text {
-                                text: lang.language;
-                                color: Theme.text-primary;
-                                font-size: 12px;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        Text {
-                            width: 80px;
-                            text: lang.files;
-                            color: Theme.text-secondary;
-                            font-family: Theme.font-mono;
-                            font-size: 12px;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            width: 110px;
-                            text: lang.code;
-                            color: Theme.text-primary;
-                            font-family: Theme.font-mono;
-                            font-size: 12px;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            width: 110px;
-                            text: lang.comments;
-                            color: Theme.text-secondary;
-                            font-family: Theme.font-mono;
-                            font-size: 12px;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            width: 90px;
-                            text: lang.blanks;
-                            color: Theme.text-muted;
-                            font-family: Theme.font-mono;
-                            font-size: 12px;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            width: 80px;
-                            text: lang.percentage-text;
-                            color: Theme.accent-primary;
-                            font-family: Theme.font-mono;
-                            font-size: 12px;
-                            vertical-alignment: center;
                         }
                     }
                 }
             }
 
-            // Panel 2: 52-Week Commit Activity Heatmap
+            // Panel 1: Collapsible Language Breakdown
             Rectangle {
                 border-radius: 6px;
                 background: Theme.bg-surface;
@@ -267,51 +211,272 @@ export component AnalyticsView inherits Rectangle {
 
                     HorizontalLayout {
                         alignment: space-between;
+                        height: 24px;
 
-                        Text {
-                            text: "52-Week Commit Activity Heatmap";
-                            color: Theme.text-primary;
-                            font-size: 13px;
-                            font-weight: 700;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            border-radius: 4px;
+                            background: lang-hdr-touch.has-hover ? Theme.bg-hover : transparent;
+                            accessible-role: button;
+                            accessible-label: "Toggle Language Breakdown panel";
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                padding-left: 4px;
+
+                                Text {
+                                    text: root.collapsed-languages ? "▶" : "▼";
+                                    color: Theme.accent-primary;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "Language Breakdown (Ref Target)";
+                                    color: Theme.text-primary;
+                                    font-size: 13px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "(" + root.languages.length + " languages)";
+                                    color: Theme.text-muted;
+                                    font-family: Theme.font-mono;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            lang-hdr-touch := TouchArea {
+                                clicked => {
+                                    root.collapsed-languages = !root.collapsed-languages;
+                                }
+                            }
                         }
 
-                        Text {
-                            text: root.hovered-heatmap-label;
-                            color: Theme.text-secondary;
-                            font-family: Theme.font-mono;
-                            font-size: 11px;
-                            vertical-alignment: center;
+                        if !root.collapsed-languages && root.languages.length > 10 : Rectangle {
+                            width: 124px;
+                            height: 24px;
+                            border-radius: 4px;
+                            background: show-all-lang-touch.has-hover ? Theme.bg-hover : Theme.bg-elevated;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            accessible-role: button;
+                            accessible-label: "Toggle showing all languages or top 10";
+
+                            Text {
+                                text: root.show-all-languages
+                                    ? "Show Top 10"
+                                    : "Show All (" + root.languages.length + ")";
+                                color: Theme.accent-primary;
+                                font-size: 11px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            show-all-lang-touch := TouchArea {
+                                clicked => {
+                                    root.show-all-languages = !root.show-all-languages;
+                                }
+                            }
                         }
                     }
 
-                    HorizontalLayout {
-                        spacing: 3px;
-                        alignment: start;
+                    // Stacked proportional language bar remains visible as a compact summary
+                    Rectangle {
+                        height: 10px;
+                        border-radius: 5px;
+                        background: Theme.bg-elevated;
+                        clip: true;
 
-                        for week in root.heatmap-weeks : VerticalLayout {
-                            spacing: 3px;
-                            for day in week.days : Rectangle {
-                                width: 13px;
-                                height: 13px;
-                                border-radius: 2px;
-                                background: day.intensity == 0 ? Theme.heatmap-0 :
-                                            day.intensity == 1 ? Theme.heatmap-1 :
-                                            day.intensity == 2 ? Theme.heatmap-2 :
-                                            day.intensity == 3 ? Theme.heatmap-3 : Theme.heatmap-4;
-                                border-width: day-touch.has-hover ? 1px : 0px;
-                                border-color: Theme.text-primary;
-                                accessible-role: button;
-                                accessible-label: day.date-iso;
+                        HorizontalLayout {
+                            spacing: 0px;
+                            for lang in root.languages : Rectangle {
+                                horizontal-stretch: lang.ratio;
+                                background: lang.color;
+                            }
+                        }
+                    }
 
-                                day-touch := TouchArea {
-                                    pointer-event(event) => {
-                                        if self.has-hover {
-                                            root.hovered-heatmap-label = day.date-iso + " (" + day.commit-count + " commits)";
-                                        }
+                    if !root.collapsed-languages : VerticalLayout {
+                        spacing: 6px;
+
+                        HorizontalLayout {
+                            spacing: 12px;
+                            padding-left: 4px;
+                            padding-right: 4px;
+
+                            Text {
+                                horizontal-stretch: 2;
+                                min-width: 160px;
+                                text: "Language";
+                                color: Theme.text-secondary;
+                                font-size: 11px;
+                                font-weight: 700;
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                min-width: 80px;
+                                text: "Files";
+                                color: Theme.text-secondary;
+                                font-size: 11px;
+                                font-weight: 700;
+                                horizontal-alignment: right;
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                min-width: 100px;
+                                text: "Code Lines";
+                                color: Theme.text-secondary;
+                                font-size: 11px;
+                                font-weight: 700;
+                                horizontal-alignment: right;
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                min-width: 100px;
+                                text: "Comments";
+                                color: Theme.text-secondary;
+                                font-size: 11px;
+                                font-weight: 700;
+                                horizontal-alignment: right;
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                min-width: 90px;
+                                text: "Blanks";
+                                color: Theme.text-secondary;
+                                font-size: 11px;
+                                font-weight: 700;
+                                horizontal-alignment: right;
+                            }
+                            Text {
+                                width: 68px;
+                                text: "Share";
+                                color: Theme.text-secondary;
+                                font-size: 11px;
+                                font-weight: 700;
+                                horizontal-alignment: right;
+                            }
+                            Text {
+                                horizontal-stretch: 3;
+                                min-width: 140px;
+                                text: "Proportion";
+                                color: Theme.text-secondary;
+                                font-size: 11px;
+                                font-weight: 700;
+                            }
+                        }
+
+                        for lang[idx] in root.languages : Rectangle {
+                            visible: root.show-all-languages || idx < 10;
+                            height: (root.show-all-languages || idx < 10) ? 24px : 0px;
+                            border-radius: 4px;
+                            background: Math.mod(idx, 2) == 1 ? #131922 : transparent;
+                            clip: true;
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                padding-left: 4px;
+                                padding-right: 4px;
+
+                                HorizontalLayout {
+                                    horizontal-stretch: 2;
+                                    min-width: 160px;
+                                    spacing: 8px;
+                                    alignment: start;
+
+                                    Rectangle {
+                                        width: 10px;
+                                        height: 10px;
+                                        y: (parent.height - self.height) / 2;
+                                        border-radius: 5px;
+                                        background: lang.color;
                                     }
-                                    clicked => {
-                                        if day.commit-count > 0 {
-                                            root.filter-by-date(day.date-iso);
+
+                                    Text {
+                                        text: lang.language;
+                                        color: Theme.text-primary;
+                                        font-size: 12px;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Text {
+                                    horizontal-stretch: 1;
+                                    min-width: 80px;
+                                    text: lang.files-text;
+                                    color: Theme.text-secondary;
+                                    font-family: Theme.font-mono;
+                                    font-size: 12px;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    horizontal-stretch: 1;
+                                    min-width: 100px;
+                                    text: lang.code-text;
+                                    color: Theme.text-primary;
+                                    font-family: Theme.font-mono;
+                                    font-size: 12px;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    horizontal-stretch: 1;
+                                    min-width: 100px;
+                                    text: lang.comments-text;
+                                    color: Theme.text-secondary;
+                                    font-family: Theme.font-mono;
+                                    font-size: 12px;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    horizontal-stretch: 1;
+                                    min-width: 90px;
+                                    text: lang.blanks-text;
+                                    color: Theme.text-muted;
+                                    font-family: Theme.font-mono;
+                                    font-size: 12px;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    width: 68px;
+                                    text: lang.percentage-text;
+                                    color: Theme.accent-primary;
+                                    font-family: Theme.font-mono;
+                                    font-size: 12px;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                }
+
+                                Rectangle {
+                                    horizontal-stretch: 3;
+                                    min-width: 140px;
+
+                                    Rectangle {
+                                        width: parent.width;
+                                        height: 8px;
+                                        y: (parent.height - self.height) / 2;
+                                        border-radius: 4px;
+                                        background: Theme.bg-elevated;
+                                        clip: true;
+
+                                        Rectangle {
+                                            x: 0px;
+                                            width: parent.width * lang.share-fraction;
+                                            height: parent.height;
+                                            border-radius: 4px;
+                                            background: lang.color;
                                         }
                                     }
                                 }
@@ -321,7 +486,222 @@ export component AnalyticsView inherits Rectangle {
                 }
             }
 
-            // Panel 3: Code Churn & Commit Velocity Timeline (Plotters SharedPixelBuffer)
+            // Panel 2: Collapsible 52-Week Commit Activity Heatmap + Activity Summary Card
+            Rectangle {
+                border-radius: 6px;
+                background: Theme.bg-surface;
+                border-width: 1px;
+                border-color: Theme.border-subtle;
+
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+
+                    Rectangle {
+                        height: 24px;
+                        border-radius: 4px;
+                        background: heatmap-hdr-touch.has-hover ? Theme.bg-hover : transparent;
+                        accessible-role: button;
+                        accessible-label: "Toggle 52-Week Commit Activity Heatmap panel";
+
+                        HorizontalLayout {
+                            alignment: space-between;
+                            padding-left: 4px;
+                            padding-right: 4px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+
+                                Text {
+                                    text: root.collapsed-heatmap ? "▶" : "▼";
+                                    color: Theme.accent-primary;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "52-Week Commit Activity Heatmap";
+                                    color: Theme.text-primary;
+                                    font-size: 13px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "(" + root.heatmap-total-commits-text + " commits in 52w)";
+                                    color: Theme.text-muted;
+                                    font-family: Theme.font-mono;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Text {
+                                text: root.hovered-heatmap-label;
+                                color: Theme.text-secondary;
+                                font-family: Theme.font-mono;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        heatmap-hdr-touch := TouchArea {
+                            clicked => {
+                                root.collapsed-heatmap = !root.collapsed-heatmap;
+                            }
+                        }
+                    }
+
+                    if !root.collapsed-heatmap : HorizontalLayout {
+                        spacing: 16px;
+
+                        // Left: 52-Week Heatmap Grid
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            // Weekday Labels
+                            VerticalLayout {
+                                spacing: 3px;
+                                width: 28px;
+
+                                Text { height: 13px; text: "Sun"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                                Text { height: 13px; text: "Mon"; color: Theme.text-secondary; font-size: 9px; vertical-alignment: center; }
+                                Text { height: 13px; text: "Tue"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                                Text { height: 13px; text: "Wed"; color: Theme.text-secondary; font-size: 9px; vertical-alignment: center; }
+                                Text { height: 13px; text: "Thu"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                                Text { height: 13px; text: "Fri"; color: Theme.text-secondary; font-size: 9px; vertical-alignment: center; }
+                                Text { height: 13px; text: "Sat"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 3px;
+                                alignment: start;
+
+                                for week in root.heatmap-weeks : VerticalLayout {
+                                    spacing: 3px;
+                                    for day in week.days : Rectangle {
+                                        width: 13px;
+                                        height: 13px;
+                                        border-radius: 2px;
+                                        background: day.intensity == 0 ? Theme.heatmap-0 :
+                                                    day.intensity == 1 ? Theme.heatmap-1 :
+                                                    day.intensity == 2 ? Theme.heatmap-2 :
+                                                    day.intensity == 3 ? Theme.heatmap-3 : Theme.heatmap-4;
+                                        border-width: day-touch.has-hover ? 1px : 0px;
+                                        border-color: Theme.text-primary;
+                                        accessible-role: button;
+                                        accessible-label: day.date-iso;
+
+                                        day-touch := TouchArea {
+                                            pointer-event(event) => {
+                                                if self.has-hover {
+                                                    root.hovered-heatmap-label = day.date-iso + " (" + day.commit-count + " commits)";
+                                                }
+                                            }
+                                            clicked => {
+                                                if day.commit-count > 0 {
+                                                    root.filter-by-date(day.date-iso);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Right: 52-Week Activity Summary & Intensity Scale (utilizing horizontal space)
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            min-width: 220px;
+                            border-radius: 6px;
+                            background: Theme.bg-elevated;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 6px;
+                                alignment: space-between;
+
+                                HorizontalLayout {
+                                    alignment: space-between;
+                                    Text {
+                                        text: "52-Week Commits";
+                                        color: Theme.text-secondary;
+                                        font-size: 11px;
+                                    }
+                                    Text {
+                                        text: root.heatmap-total-commits-text;
+                                        color: Theme.text-primary;
+                                        font-family: Theme.font-mono;
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    alignment: space-between;
+                                    Text {
+                                        text: "Active Days";
+                                        color: Theme.text-secondary;
+                                        font-size: 11px;
+                                    }
+                                    Text {
+                                        text: root.heatmap-active-days-text;
+                                        color: Theme.accent-emerald;
+                                        font-family: Theme.font-mono;
+                                        font-size: 11px;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    alignment: space-between;
+                                    Text {
+                                        text: "Peak Day";
+                                        color: Theme.text-secondary;
+                                        font-size: 11px;
+                                    }
+                                    Text {
+                                        text: root.heatmap-peak-day-text;
+                                        color: Theme.accent-primary;
+                                        font-family: Theme.font-mono;
+                                        font-size: 11px;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    alignment: space-between;
+
+                                    Text {
+                                        text: "Intensity";
+                                        color: Theme.text-muted;
+                                        font-size: 10px;
+                                        vertical-alignment: center;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        alignment: end;
+
+                                        Text { text: "Less"; color: Theme.text-muted; font-size: 10px; vertical-alignment: center; }
+                                        Rectangle { width: 11px; height: 11px; y: (parent.height - self.height) / 2; border-radius: 2px; background: Theme.heatmap-0; }
+                                        Rectangle { width: 11px; height: 11px; y: (parent.height - self.height) / 2; border-radius: 2px; background: Theme.heatmap-1; }
+                                        Rectangle { width: 11px; height: 11px; y: (parent.height - self.height) / 2; border-radius: 2px; background: Theme.heatmap-2; }
+                                        Rectangle { width: 11px; height: 11px; y: (parent.height - self.height) / 2; border-radius: 2px; background: Theme.heatmap-3; }
+                                        Rectangle { width: 11px; height: 11px; y: (parent.height - self.height) / 2; border-radius: 2px; background: Theme.heatmap-4; }
+                                        Text { text: "More"; color: Theme.text-muted; font-size: 10px; vertical-alignment: center; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Panel 3: Collapsible Code Churn & Commit Velocity Timeline
             Rectangle {
                 border-radius: 6px;
                 background: Theme.bg-surface;
@@ -334,41 +714,64 @@ export component AnalyticsView inherits Rectangle {
 
                     HorizontalLayout {
                         alignment: space-between;
+                        height: 24px;
 
-                        HorizontalLayout {
-                            spacing: 14px;
-                            alignment: start;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            border-radius: 4px;
+                            background: churn-hdr-touch.has-hover ? Theme.bg-hover : transparent;
+                            accessible-role: button;
+                            accessible-label: "Toggle Code Churn and Commit Velocity Timeline panel";
 
-                            Text {
-                                text: "Code Churn & Commit Velocity Timeline";
-                                color: Theme.text-primary;
-                                font-size: 13px;
-                                font-weight: 700;
-                                vertical-alignment: center;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                alignment: start;
+                                padding-left: 4px;
+
+                                Text {
+                                    text: root.collapsed-churn ? "▶" : "▼";
+                                    color: Theme.accent-primary;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "Code Churn & Commit Velocity Timeline";
+                                    color: Theme.text-primary;
+                                    font-size: 13px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "+Insertions";
+                                    color: Theme.accent-emerald;
+                                    font-family: Theme.font-mono;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "-Deletions";
+                                    color: Theme.accent-coral;
+                                    font-family: Theme.font-mono;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "Velocity (commits)";
+                                    color: Theme.accent-primary;
+                                    font-family: Theme.font-mono;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
                             }
 
-                            Text {
-                                text: "+Insertions";
-                                color: Theme.accent-emerald;
-                                font-family: Theme.font-mono;
-                                font-size: 11px;
-                                vertical-alignment: center;
-                            }
-
-                            Text {
-                                text: "-Deletions";
-                                color: Theme.accent-coral;
-                                font-family: Theme.font-mono;
-                                font-size: 11px;
-                                vertical-alignment: center;
-                            }
-
-                            Text {
-                                text: "Velocity (commits)";
-                                color: Theme.accent-primary;
-                                font-family: Theme.font-mono;
-                                font-size: 11px;
-                                vertical-alignment: center;
+                            churn-hdr-touch := TouchArea {
+                                clicked => {
+                                    root.collapsed-churn = !root.collapsed-churn;
+                                }
                             }
                         }
 
@@ -427,7 +830,7 @@ export component AnalyticsView inherits Rectangle {
                         }
                     }
 
-                    Rectangle {
+                    if !root.collapsed-churn : Rectangle {
                         height: 220px;
                         border-radius: 4px;
                         background: Theme.bg-canvas;
@@ -443,10 +846,14 @@ export component AnalyticsView inherits Rectangle {
                 }
             }
 
-            // Panels 4 & 5: Contributor Leaderboard and File Hotspots
+            // Panels 4 & 5: Collapsible Contributor Leaderboard and File Hotspots
+            // Expands vertically when middle panels are collapsed so no vertical space is wasted
             HorizontalLayout {
                 spacing: 14px;
-                height: 290px;
+                vertical-stretch: 1;
+                min-height: root.collapsed-leaderboards
+                    ? 52px
+                    : ((root.collapsed-languages && root.collapsed-heatmap && root.collapsed-churn) ? 460px : 320px);
 
                 // Panel 4: Contributor Leaderboard
                 Rectangle {
@@ -460,14 +867,43 @@ export component AnalyticsView inherits Rectangle {
                         padding: 14px;
                         spacing: 8px;
 
-                        Text {
-                            text: "Top Contributors (Click row to filter commits)";
-                            color: Theme.text-primary;
-                            font-size: 13px;
-                            font-weight: 700;
+                        Rectangle {
+                            height: 24px;
+                            border-radius: 4px;
+                            background: contrib-hdr-touch.has-hover ? Theme.bg-hover : transparent;
+                            accessible-role: button;
+                            accessible-label: "Toggle Top Contributors panel";
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                padding-left: 4px;
+
+                                Text {
+                                    text: root.collapsed-leaderboards ? "▶" : "▼";
+                                    color: Theme.accent-primary;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "Top Contributors (Click row to filter commits)";
+                                    color: Theme.text-primary;
+                                    font-size: 13px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            contrib-hdr-touch := TouchArea {
+                                clicked => {
+                                    root.collapsed-leaderboards = !root.collapsed-leaderboards;
+                                }
+                            }
                         }
 
-                        ListView {
+                        if !root.collapsed-leaderboards : ListView {
+                            vertical-stretch: 1;
                             for author in root.contributors : Rectangle {
                                 height: 32px;
                                 border-radius: 4px;
@@ -493,7 +929,7 @@ export component AnalyticsView inherits Rectangle {
                                         spacing: 10px;
 
                                         Text {
-                                            text: author.commits + " commits";
+                                            text: author.commits-text + " commits";
                                             color: Theme.accent-primary;
                                             font-family: Theme.font-mono;
                                             font-size: 11px;
@@ -501,7 +937,7 @@ export component AnalyticsView inherits Rectangle {
                                         }
 
                                         Text {
-                                            text: "+" + author.insertions;
+                                            text: "+" + author.insertions-text;
                                             color: Theme.accent-emerald;
                                             font-family: Theme.font-mono;
                                             font-size: 11px;
@@ -509,7 +945,7 @@ export component AnalyticsView inherits Rectangle {
                                         }
 
                                         Text {
-                                            text: "-" + author.deletions;
+                                            text: "-" + author.deletions-text;
                                             color: Theme.accent-coral;
                                             font-family: Theme.font-mono;
                                             font-size: 11px;
@@ -540,14 +976,43 @@ export component AnalyticsView inherits Rectangle {
                         padding: 14px;
                         spacing: 8px;
 
-                        Text {
-                            text: "File Hotspots (Click row to inspect File & Blame)";
-                            color: Theme.text-primary;
-                            font-size: 13px;
-                            font-weight: 700;
+                        Rectangle {
+                            height: 24px;
+                            border-radius: 4px;
+                            background: hotspot-hdr-touch.has-hover ? Theme.bg-hover : transparent;
+                            accessible-role: button;
+                            accessible-label: "Toggle File Hotspots panel";
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                padding-left: 4px;
+
+                                Text {
+                                    text: root.collapsed-leaderboards ? "▶" : "▼";
+                                    color: Theme.accent-primary;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "File Hotspots (Click row to inspect File & Blame)";
+                                    color: Theme.text-primary;
+                                    font-size: 13px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            hotspot-hdr-touch := TouchArea {
+                                clicked => {
+                                    root.collapsed-leaderboards = !root.collapsed-leaderboards;
+                                }
+                            }
                         }
 
-                        ListView {
+                        if !root.collapsed-leaderboards : ListView {
+                            vertical-stretch: 1;
                             for spot in root.hotspots : Rectangle {
                                 height: 32px;
                                 border-radius: 4px;
@@ -574,7 +1039,7 @@ export component AnalyticsView inherits Rectangle {
                                         spacing: 10px;
 
                                         Text {
-                                            text: spot.touches + " touches";
+                                            text: spot.touches-text + " touches";
                                             color: Theme.accent-amber;
                                             font-family: Theme.font-mono;
                                             font-size: 11px;
@@ -582,7 +1047,7 @@ export component AnalyticsView inherits Rectangle {
                                         }
 
                                         Text {
-                                            text: "+" + spot.insertions;
+                                            text: "+" + spot.insertions-text;
                                             color: Theme.accent-emerald;
                                             font-family: Theme.font-mono;
                                             font-size: 11px;
@@ -590,7 +1055,7 @@ export component AnalyticsView inherits Rectangle {
                                         }
 
                                         Text {
-                                            text: "-" + spot.deletions;
+                                            text: "-" + spot.deletions-text;
                                             color: Theme.accent-coral;
                                             font-family: Theme.font-mono;
                                             font-size: 11px;

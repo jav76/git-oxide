@@ -55,16 +55,18 @@ pub fn resolve_commit_and_parent_trees(
 
     let first_parent_oid: Option<ObjectId> = commit.parent_ids().next().map(gix::Id::detach);
     let old_tree_oid: Option<ObjectId> = if let Some(parent_oid) = first_parent_oid {
-        let parent_commit = repo
-            .find_object(parent_oid)
-            .map_err(|error| EngineError::GitOperation(format!("failed to find parent commit {parent_oid}: {error}")))?
-            .try_into_commit()
-            .map_err(|error| EngineError::GitOperation(format!("parent {parent_oid} is not a commit: {error}")))?;
-        let tree_oid: ObjectId = parent_commit
-            .tree_id()
-            .map_err(|error| EngineError::GitOperation(format!("failed to read parent tree id: {error}")))?
-            .detach();
-        Some(tree_oid)
+        if let Ok(parent_obj) = repo.find_object(parent_oid) {
+            let parent_commit = parent_obj
+                .try_into_commit()
+                .map_err(|error| EngineError::GitOperation(format!("parent {parent_oid} is not a commit: {error}")))?;
+            let tree_oid: ObjectId = parent_commit
+                .tree_id()
+                .map_err(|error| EngineError::GitOperation(format!("failed to read parent tree id: {error}")))?
+                .detach();
+            Some(tree_oid)
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -164,6 +166,20 @@ fn coalesce_renamed_changes(changes: Vec<RawTreeChange>) -> Vec<RawTreeChange> {
     modified
 }
 
+fn format_child_path(prefix: &str, name_bytes: &[u8]) -> String {
+    let name: std::borrow::Cow<'_, str> = String::from_utf8_lossy(name_bytes);
+    if prefix.is_empty() { name.into_owned() } else { format!("{prefix}/{name}") }
+}
+
+fn parse_borrowed_tree_entries(tree_bytes: &[u8]) -> Vec<(&[u8], EntryKind, ObjectId)> {
+    let mut entries: Vec<(&[u8], EntryKind, ObjectId)> = Vec::new();
+    for entry_ref in TreeRefIter::from_bytes(tree_bytes).flatten() {
+        entries.push((entry_ref.filename, entry_ref.mode.kind(), entry_ref.oid.to_owned()));
+    }
+    entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    entries
+}
+
 fn diff_trees_recursive(
     repo: &gix::Repository,
     prefix: &str,
@@ -175,68 +191,89 @@ fn diff_trees_recursive(
         return Ok(());
     }
 
-    let old_entries: BTreeMap<String, (EntryKind, ObjectId)> = match old_tree_oid {
-        Some(oid) => read_tree_entries_map(repo, oid)?,
-        None => BTreeMap::new(),
-    };
-    let new_entries: BTreeMap<String, (EntryKind, ObjectId)> = match new_tree_oid {
-        Some(oid) => read_tree_entries_map(repo, oid)?,
-        None => BTreeMap::new(),
-    };
+    let old_bytes: Vec<u8> = read_blob_bytes(repo, old_tree_oid)?;
+    let new_bytes: Vec<u8> = read_blob_bytes(repo, new_tree_oid)?;
 
-    for (name, (old_kind, old_oid)) in &old_entries {
-        let full_path: String = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+    let old_entries: Vec<(&[u8], EntryKind, ObjectId)> = parse_borrowed_tree_entries(&old_bytes);
+    let new_entries: Vec<(&[u8], EntryKind, ObjectId)> = parse_borrowed_tree_entries(&new_bytes);
 
-        match new_entries.get(name) {
-            None => {
-                if *old_kind == EntryKind::Tree {
-                    diff_trees_recursive(repo, &full_path, Some(*old_oid), None, changes)?;
-                } else if is_blob_entry(*old_kind) {
+    let mut old_idx: usize = 0;
+    let mut new_idx: usize = 0;
+
+    while old_idx < old_entries.len() && new_idx < new_entries.len() {
+        let (old_name, old_kind, old_oid) = old_entries[old_idx];
+        let (new_name, new_kind, new_oid) = new_entries[new_idx];
+
+        match old_name.cmp(new_name) {
+            std::cmp::Ordering::Less => {
+                let full_path: String = format_child_path(prefix, old_name);
+                if old_kind == EntryKind::Tree {
+                    diff_trees_recursive(repo, &full_path, Some(old_oid), None, changes)?;
+                } else if is_blob_entry(old_kind) {
                     changes.push(RawTreeChange {
                         path: full_path,
                         old_path: None,
-                        old_blob_oid: Some(*old_oid),
+                        old_blob_oid: Some(old_oid),
                         new_blob_oid: None,
                     });
                 }
+                old_idx += 1;
             }
-            Some((new_kind, new_oid)) => {
+            std::cmp::Ordering::Greater => {
+                let full_path: String = format_child_path(prefix, new_name);
+                if new_kind == EntryKind::Tree {
+                    diff_trees_recursive(repo, &full_path, None, Some(new_oid), changes)?;
+                } else if is_blob_entry(new_kind) {
+                    changes.push(RawTreeChange {
+                        path: full_path,
+                        old_path: None,
+                        old_blob_oid: None,
+                        new_blob_oid: Some(new_oid),
+                    });
+                }
+                new_idx += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                old_idx += 1;
+                new_idx += 1;
                 if old_oid == new_oid && old_kind == new_kind {
                     continue;
                 }
-                match (*old_kind, *new_kind) {
+
+                let full_path: String = format_child_path(prefix, old_name);
+                match (old_kind, new_kind) {
                     (EntryKind::Tree, EntryKind::Tree) => {
-                        diff_trees_recursive(repo, &full_path, Some(*old_oid), Some(*new_oid), changes)?;
+                        diff_trees_recursive(repo, &full_path, Some(old_oid), Some(new_oid), changes)?;
                     }
                     (EntryKind::Tree, _) => {
-                        diff_trees_recursive(repo, &full_path, Some(*old_oid), None, changes)?;
-                        if is_blob_entry(*new_kind) {
+                        diff_trees_recursive(repo, &full_path, Some(old_oid), None, changes)?;
+                        if is_blob_entry(new_kind) {
                             changes.push(RawTreeChange {
                                 path: full_path,
                                 old_path: None,
                                 old_blob_oid: None,
-                                new_blob_oid: Some(*new_oid),
+                                new_blob_oid: Some(new_oid),
                             });
                         }
                     }
                     (_, EntryKind::Tree) => {
-                        if is_blob_entry(*old_kind) {
+                        if is_blob_entry(old_kind) {
                             changes.push(RawTreeChange {
                                 path: full_path.clone(),
                                 old_path: None,
-                                old_blob_oid: Some(*old_oid),
+                                old_blob_oid: Some(old_oid),
                                 new_blob_oid: None,
                             });
                         }
-                        diff_trees_recursive(repo, &full_path, None, Some(*new_oid), changes)?;
+                        diff_trees_recursive(repo, &full_path, None, Some(new_oid), changes)?;
                     }
                     _ => {
-                        if is_blob_entry(*old_kind) || is_blob_entry(*new_kind) {
+                        if is_blob_entry(old_kind) || is_blob_entry(new_kind) {
                             changes.push(RawTreeChange {
                                 path: full_path,
                                 old_path: None,
-                                old_blob_oid: is_blob_entry(*old_kind).then_some(*old_oid),
-                                new_blob_oid: is_blob_entry(*new_kind).then_some(*new_oid),
+                                old_blob_oid: is_blob_entry(old_kind).then_some(old_oid),
+                                new_blob_oid: is_blob_entry(new_kind).then_some(new_oid),
                             });
                         }
                     }
@@ -245,21 +282,36 @@ fn diff_trees_recursive(
         }
     }
 
-    for (name, (new_kind, new_oid)) in &new_entries {
-        if old_entries.contains_key(name) {
-            continue;
+    while old_idx < old_entries.len() {
+        let (old_name, old_kind, old_oid) = old_entries[old_idx];
+        let full_path: String = format_child_path(prefix, old_name);
+        if old_kind == EntryKind::Tree {
+            diff_trees_recursive(repo, &full_path, Some(old_oid), None, changes)?;
+        } else if is_blob_entry(old_kind) {
+            changes.push(RawTreeChange {
+                path: full_path,
+                old_path: None,
+                old_blob_oid: Some(old_oid),
+                new_blob_oid: None,
+            });
         }
-        let full_path: String = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
-        if *new_kind == EntryKind::Tree {
-            diff_trees_recursive(repo, &full_path, None, Some(*new_oid), changes)?;
-        } else if is_blob_entry(*new_kind) {
+        old_idx += 1;
+    }
+
+    while new_idx < new_entries.len() {
+        let (new_name, new_kind, new_oid) = new_entries[new_idx];
+        let full_path: String = format_child_path(prefix, new_name);
+        if new_kind == EntryKind::Tree {
+            diff_trees_recursive(repo, &full_path, None, Some(new_oid), changes)?;
+        } else if is_blob_entry(new_kind) {
             changes.push(RawTreeChange {
                 path: full_path,
                 old_path: None,
                 old_blob_oid: None,
-                new_blob_oid: Some(*new_oid),
+                new_blob_oid: Some(new_oid),
             });
         }
+        new_idx += 1;
     }
 
     Ok(())
@@ -304,10 +356,55 @@ fn is_binary_or_oversized(bytes: &[u8]) -> bool {
     bytes[..check_len].contains(&0)
 }
 
+fn count_lines_fast(bytes: &[u8]) -> u32 {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let segments: u32 = bytes.split(|&b| b == b'\n').count() as u32;
+    if bytes.last() == Some(&b'\n') { segments.saturating_sub(1) } else { segments }
+}
+
+fn trim_common_prefix_suffix_lines<'a>(old_str: &'a str, new_str: &'a str) -> (&'a str, &'a str) {
+    let old_bytes: &[u8] = old_str.as_bytes();
+    let new_bytes: &[u8] = new_str.as_bytes();
+
+    // Find common byte prefix and back up to the start of the first differing line.
+    let prefix_match: usize = old_bytes.iter().zip(new_bytes.iter()).take_while(|(a, b)| a == b).count();
+    let line_start: usize = if prefix_match == 0 {
+        0
+    } else {
+        old_bytes[..prefix_match].iter().rposition(|&b| b == b'\n').map_or(0, |pos| pos + 1)
+    };
+
+    let old_rem: &[u8] = &old_bytes[line_start..];
+    let new_rem: &[u8] = &new_bytes[line_start..];
+
+    // Find common byte suffix and advance to the end of the last differing line.
+    let suffix_match: usize = old_rem.iter().rev().zip(new_rem.iter().rev()).take_while(|(a, b)| a == b).count();
+    let suffix_trim: usize = if suffix_match == 0 {
+        0
+    } else {
+        let suffix_slice: &[u8] = &old_rem[(old_rem.len() - suffix_match)..];
+        suffix_slice.iter().position(|&b| b == b'\n').map_or(0, |pos| suffix_match - pos - 1)
+    };
+
+    let old_end: usize = old_bytes.len().saturating_sub(suffix_trim);
+    let new_end: usize = new_bytes.len().saturating_sub(suffix_trim);
+
+    (old_str.get(line_start..old_end).unwrap_or(old_str), new_str.get(line_start..new_end).unwrap_or(new_str))
+}
+
 /// Fast line insertion and deletion counter between two blob slices using `imara-diff` Histogram.
 pub fn count_blob_diff_churn(old_bytes: &[u8], new_bytes: &[u8]) -> (u32, u32) {
     if is_binary_or_oversized(old_bytes) || is_binary_or_oversized(new_bytes) {
         return (0, 0);
+    }
+
+    if old_bytes.is_empty() {
+        return (count_lines_fast(new_bytes), 0);
+    }
+    if new_bytes.is_empty() {
+        return (0, count_lines_fast(old_bytes));
     }
 
     let Ok(old_str) = std::str::from_utf8(old_bytes) else {
@@ -317,16 +414,18 @@ pub fn count_blob_diff_churn(old_bytes: &[u8], new_bytes: &[u8]) -> (u32, u32) {
         return (0, 0);
     };
 
-    if old_str.is_empty() {
-        let added: u32 = new_str.lines().count() as u32;
-        return (added, 0);
+    let (old_trimmed, new_trimmed) = trim_common_prefix_suffix_lines(old_str, new_str);
+    if old_trimmed.is_empty() && new_trimmed.is_empty() {
+        return (0, 0);
     }
-    if new_str.is_empty() {
-        let deleted: u32 = old_str.lines().count() as u32;
-        return (0, deleted);
+    if old_trimmed.is_empty() {
+        return (count_lines_fast(new_trimmed.as_bytes()), 0);
+    }
+    if new_trimmed.is_empty() {
+        return (0, count_lines_fast(old_trimmed.as_bytes()));
     }
 
-    let input: InternedInput<&str> = InternedInput::new(old_str, new_str);
+    let input: InternedInput<&str> = InternedInput::new(old_trimmed, new_trimmed);
     let mut insertions: u32 = 0;
     let mut deletions: u32 = 0;
 
@@ -369,11 +468,46 @@ pub fn list_commit_changed_files(
 }
 
 /// Computes `FileChurnEntry` totals for a single commit (used by the Phase 2 worker).
+///
+/// Skips merge commits (`parent_count > 1`) so subsystem merges do not double-count line churn.
 pub fn compute_commit_churn_entries(
     repo: &gix::Repository,
     commit_oid: ObjectId,
 ) -> Result<Vec<FileChurnEntry>, EngineError> {
-    let (old_tree_oid, new_tree_oid) = resolve_commit_and_parent_trees(repo, commit_oid)?;
+    let commit = repo
+        .find_object(commit_oid)
+        .map_err(|error| EngineError::GitOperation(format!("failed to find commit {commit_oid}: {error}")))?
+        .try_into_commit()
+        .map_err(|error| EngineError::GitOperation(format!("object {commit_oid} is not a commit: {error}")))?;
+
+    let mut parents = commit.parent_ids();
+    let first_parent: Option<ObjectId> = parents.next().map(gix::Id::detach);
+    if parents.next().is_some() {
+        return Ok(Vec::new());
+    }
+
+    let new_tree_oid: ObjectId = commit
+        .tree_id()
+        .map_err(|error| EngineError::GitOperation(format!("failed to read commit tree id: {error}")))?
+        .detach();
+
+    let old_tree_oid: Option<ObjectId> = if let Some(parent_oid) = first_parent {
+        let Ok(parent_obj) = repo.find_object(parent_oid) else {
+            // Shallow clone graft boundary: parent commit object is not present locally.
+            return Ok(Vec::new());
+        };
+        let parent_commit = parent_obj
+            .try_into_commit()
+            .map_err(|error| EngineError::GitOperation(format!("parent {parent_oid} is not a commit: {error}")))?;
+        let tree_oid: ObjectId = parent_commit
+            .tree_id()
+            .map_err(|error| EngineError::GitOperation(format!("failed to read parent tree id: {error}")))?
+            .detach();
+        Some(tree_oid)
+    } else {
+        None
+    };
+
     let raw_changes: Vec<RawTreeChange> = collect_tree_changes(repo, old_tree_oid, Some(new_tree_oid))?;
 
     let mut entries: Vec<FileChurnEntry> = Vec::with_capacity(raw_changes.len());

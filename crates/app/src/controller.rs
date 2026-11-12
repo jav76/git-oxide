@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use git_oxide_engine::cache::OidCache;
 use git_oxide_engine::indexer::{run_phase1, run_phase2_churn};
@@ -13,7 +14,7 @@ use git_oxide_engine::models::{
 use git_oxide_engine::{
     load_commit_changed_files, load_commit_file_diff, load_ref_file_blame, load_ref_file_source, load_ref_tree_entries,
 };
-use slint::{Color, ComponentHandle, ModelRc, SharedString, VecModel, Weak};
+use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 
 use crate::charts::{DEFAULT_CHART_HEIGHT, DEFAULT_CHART_WIDTH, render_churn_chart_image};
 use crate::{
@@ -22,6 +23,24 @@ use crate::{
 };
 
 const BYTES_PER_KIB: u64 = 1_024;
+const MAX_VISIBLE_COMMITS: usize = 2_500;
+const MAX_VISIBLE_TREE_ENTRIES: usize = 5_000;
+const MIN_UI_PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Formats an integer with ASCII comma thousand separators (e.g., `33373576` -> `"33,373,576"`).
+fn format_u64(value: u64) -> String {
+    let raw: String = value.to_string();
+    let bytes: &[u8] = raw.as_bytes();
+    let len: usize = bytes.len();
+    let mut out: String = String::with_capacity(len + len / 3);
+    for (idx, &ch) in bytes.iter().enumerate() {
+        if idx > 0 && (len - idx).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(char::from(ch));
+    }
+    out
+}
 
 /// Shared controller state synchronized between the Slint UI thread and background workers.
 pub struct ControllerState {
@@ -31,6 +50,7 @@ pub struct ControllerState {
     pub cache: OidCache,
     pub cancel_flag: Arc<AtomicBool>,
     pub all_commits: Vec<CommitSummary>,
+    pub commit_idx_by_oid: HashMap<String, usize>,
     pub all_tree_entries: Vec<TreeEntryItem>,
     pub weekly_churn: Vec<ChurnTimeBucket>,
     pub monthly_churn: Vec<ChurnTimeBucket>,
@@ -53,7 +73,12 @@ fn lock_state(state: &Arc<Mutex<ControllerState>>) -> std::sync::MutexGuard<'_, 
 /// Wires all `AppWindow` callbacks to background `git-oxide-engine` workers.
 ///
 /// Must be called on the Slint UI thread.
-pub fn attach_controller(window: &AppWindow, cache: OidCache, initial_repo_path: PathBuf) {
+pub fn attach_controller(
+    window: &AppWindow,
+    cache: OidCache,
+    initial_repo_path: PathBuf,
+    initial_ref: Option<String>,
+) {
     let state: Arc<Mutex<ControllerState>> = Arc::new(Mutex::new(ControllerState {
         repo_path: initial_repo_path.clone(),
         active_ref_name: String::new(),
@@ -61,6 +86,7 @@ pub fn attach_controller(window: &AppWindow, cache: OidCache, initial_repo_path:
         cache,
         cancel_flag: Arc::new(AtomicBool::new(false)),
         all_commits: Vec::new(),
+        commit_idx_by_oid: HashMap::new(),
         all_tree_entries: Vec::new(),
         weekly_churn: Vec::new(),
         monthly_churn: Vec::new(),
@@ -298,15 +324,24 @@ pub fn attach_controller(window: &AppWindow, cache: OidCache, initial_repo_path:
         let state_arc: Arc<Mutex<ControllerState>> = Arc::clone(&state);
         window.on_jump_to_commit(move |commit_oid: SharedString| {
             let target_oid: String = commit_oid.to_string();
+            let short_prefix: String = target_oid.chars().take(10).collect();
             {
                 let mut st = lock_state(&state_arc);
                 st.author_filter = None;
                 st.date_filter = None;
-                st.search_query.clear();
+                // If commit is beyond the top MAX_VISIBLE_COMMITS, set search query to its SHA prefix so it is visible
+                let beyond_window: bool =
+                    st.commit_idx_by_oid.get(&target_oid).is_some_and(|&idx| idx >= MAX_VISIBLE_COMMITS);
+                if beyond_window {
+                    st.search_query.clone_from(&short_prefix);
+                } else {
+                    st.search_query.clear();
+                }
             }
             if let Some(win) = window_weak.upgrade() {
+                let query_str: String = lock_state(&state_arc).search_query.clone();
                 win.set_active_filter_text(SharedString::default());
-                win.set_commit_search_query(SharedString::default());
+                win.set_commit_search_query(SharedString::from(query_str));
                 win.set_active_view(1);
                 let _ = refresh_filtered_commits(&win, &state_arc);
                 trigger_commit_selection(&window_weak, &state_arc, &target_oid);
@@ -316,7 +351,7 @@ pub fn attach_controller(window: &AppWindow, cache: OidCache, initial_repo_path:
 
     // Kick off non-blocking initial repository load
     let window_weak: Weak<AppWindow> = window.as_weak();
-    start_repository_load(&window_weak, &state, initial_repo_path, None);
+    start_repository_load(&window_weak, &state, initial_repo_path, initial_ref);
 }
 
 fn start_repository_load(
@@ -361,12 +396,29 @@ fn start_repository_load(
                     let mut st = lock_state(&state_bg);
                     st.active_ref_name.clone_from(&snapshot.active_ref_name);
                     st.active_ref_oid_hex.clone_from(&snapshot.active_ref_oid_hex);
+                    st.commit_idx_by_oid =
+                        snapshot.commits.iter().enumerate().map(|(idx, c)| (c.oid_hex.clone(), idx)).collect();
                     st.all_commits.clone_from(&snapshot.commits);
                     st.weekly_churn.clone_from(&snapshot.weekly_churn);
                     st.monthly_churn.clone_from(&snapshot.monthly_churn);
                 }
 
-                let snapshot_for_ui: Phase1Snapshot = snapshot.clone();
+                let snapshot_for_ui: Phase1Snapshot = Phase1Snapshot {
+                    repo_name: snapshot.repo_name.clone(),
+                    repo_path: snapshot.repo_path.clone(),
+                    active_ref_name: snapshot.active_ref_name.clone(),
+                    active_ref_oid_hex: snapshot.active_ref_oid_hex.clone(),
+                    refs: snapshot.refs.clone(),
+                    total_commits: snapshot.total_commits,
+                    indexed_churn_commits: snapshot.indexed_churn_commits,
+                    commits: Vec::new(),
+                    languages: snapshot.languages.clone(),
+                    contributors: snapshot.contributors.clone(),
+                    hotspots: snapshot.hotspots.clone(),
+                    heatmap_weeks: snapshot.heatmap_weeks.clone(),
+                    weekly_churn: snapshot.weekly_churn.clone(),
+                    monthly_churn: snapshot.monthly_churn.clone(),
+                };
                 let win_for_p1: Weak<AppWindow> = win_weak_bg.clone();
                 let state_for_p1: Arc<Mutex<ControllerState>> = Arc::clone(&state_bg);
 
@@ -377,46 +429,56 @@ fn start_repository_load(
                         if let Some(oid) = first_oid {
                             trigger_commit_selection(&win_for_p1, &state_for_p1, &oid);
                         }
-                        spawn_tree_entries_load(&win_for_p1, &state_for_p1, None);
+                        if win.get_active_view() == 2 {
+                            spawn_tree_entries_load(&win_for_p1, &state_for_p1, None);
+                        }
                     }
                 });
 
                 // Run Phase 2 background churn worker on this worker thread
                 let win_for_p2: Weak<AppWindow> = win_weak_bg.clone();
                 let state_for_p2: Arc<Mutex<ControllerState>> = Arc::clone(&state_bg);
+                let mut last_ui_push: Option<Instant> = None;
+                let mut pending_commit_updates: Vec<(String, u32, u32, u32)> = Vec::new();
+
                 let _ = run_phase2_churn(
                     &repo_path_bg,
                     &snapshot,
                     &cache,
                     &cancel_bg,
-                    move |progress: ChurnBatchProgress| {
+                    move |mut progress: ChurnBatchProgress| {
                         {
                             let mut st = lock_state(&state_for_p2);
                             st.weekly_churn.clone_from(&progress.weekly_churn);
                             st.monthly_churn.clone_from(&progress.monthly_churn);
-                            if !progress.updated_commits.is_empty() {
-                                let updates: HashMap<&str, (u32, u32, u32)> = progress
-                                    .updated_commits
-                                    .iter()
-                                    .map(|(oid, files, ins, del)| (oid.as_str(), (*files, *ins, *del)))
-                                    .collect();
-                                for commit in &mut st.all_commits {
-                                    if let Some((files, ins, del)) = updates.get(commit.oid_hex.as_str()) {
-                                        commit.files_changed = *files;
-                                        commit.insertions = *ins;
-                                        commit.deletions = *del;
-                                        commit.churn_indexed = true;
-                                    }
+                            for (oid, files, ins, del) in &progress.updated_commits {
+                                if let Some(&idx) = st.commit_idx_by_oid.get(oid.as_str())
+                                    && let Some(commit) = st.all_commits.get_mut(idx)
+                                {
+                                    commit.files_changed = *files;
+                                    commit.insertions = *ins;
+                                    commit.deletions = *del;
+                                    commit.churn_indexed = true;
                                 }
                             }
                         }
 
-                        let win_step: Weak<AppWindow> = win_for_p2.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(win) = win_step.upgrade() {
-                                apply_phase2_progress_to_window(&win, &progress);
-                            }
-                        });
+                        pending_commit_updates.append(&mut progress.updated_commits);
+
+                        let now: Instant = Instant::now();
+                        let should_push_ui: bool = progress.is_complete
+                            || last_ui_push.is_none_or(|prev| now.duration_since(prev) >= MIN_UI_PROGRESS_INTERVAL);
+
+                        if should_push_ui {
+                            last_ui_push = Some(now);
+                            progress.updated_commits = std::mem::take(&mut pending_commit_updates);
+                            let win_step: Weak<AppWindow> = win_for_p2.clone();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(win) = win_step.upgrade() {
+                                    apply_phase2_progress_to_window(&win, &progress);
+                                }
+                            });
+                        }
                     },
                 );
             }
@@ -443,16 +505,17 @@ fn apply_phase1_snapshot_to_window(win: &AppWindow, snapshot: &Phase1Snapshot) {
     win.set_ref_names(ModelRc::new(VecModel::from(ref_names)));
     win.set_active_ref(SharedString::from(snapshot.active_ref_name.as_str()));
 
-    win.set_total_commits_text(SharedString::from(snapshot.total_commits.to_string()));
-    win.set_total_contributors_text(SharedString::from(snapshot.contributors.len().to_string()));
+    win.set_total_commits_text(SharedString::from(format_u64(u64::from(snapshot.total_commits))));
+    win.set_total_contributors_text(SharedString::from(format_u64(snapshot.contributors.len() as u64)));
 
-    let total_files: u32 = snapshot.languages.iter().map(|l| l.files).sum();
+    let total_files: u64 = snapshot.languages.iter().map(|l| u64::from(l.files)).sum();
     let total_code: u64 = snapshot.languages.iter().map(|l| l.code).sum();
-    win.set_total_files_text(SharedString::from(total_files.to_string()));
-    win.set_total_code_lines_text(SharedString::from(total_code.to_string()));
+    win.set_total_files_text(SharedString::from(format_u64(total_files)));
+    win.set_total_code_lines_text(SharedString::from(format_u64(total_code)));
 
     win.set_languages(to_ui_language_model(&snapshot.languages));
     win.set_heatmap_weeks(to_ui_heatmap_model(&snapshot.heatmap_weeks));
+    apply_heatmap_summary_to_window(win, &snapshot.heatmap_weeks);
     win.set_contributors(to_ui_contributor_model(&snapshot.contributors));
     win.set_hotspots(to_ui_hotspot_model(&snapshot.hotspots));
 
@@ -463,15 +526,50 @@ fn apply_phase1_snapshot_to_window(win: &AppWindow, snapshot: &Phase1Snapshot) {
     if snapshot.indexed_churn_commits >= snapshot.total_commits {
         win.set_indexing_status_text(SharedString::from(format!(
             "Indexed {}/{} commits (cached)",
-            snapshot.indexed_churn_commits, snapshot.total_commits
+            format_u64(u64::from(snapshot.indexed_churn_commits)),
+            format_u64(u64::from(snapshot.total_commits))
         )));
         win.set_is_indexing(false);
     } else {
         win.set_indexing_status_text(SharedString::from(format!(
             "Indexing churn: {}/{}",
-            snapshot.indexed_churn_commits, snapshot.total_commits
+            format_u64(u64::from(snapshot.indexed_churn_commits)),
+            format_u64(u64::from(snapshot.total_commits))
         )));
         win.set_is_indexing(true);
+    }
+}
+
+fn apply_heatmap_summary_to_window(win: &AppWindow, weeks: &[HeatmapWeek]) {
+    let mut total_52w_commits: u64 = 0;
+    let mut active_days: u32 = 0;
+    let mut total_days: u32 = 0;
+    let mut peak_date: &str = "";
+    let mut peak_commits: u32 = 0;
+
+    for week in weeks {
+        for day in &week.days {
+            total_days += 1;
+            total_52w_commits += u64::from(day.commit_count);
+            if day.commit_count > 0 {
+                active_days += 1;
+            }
+            if day.commit_count > peak_commits {
+                peak_commits = day.commit_count;
+                peak_date = day.date_iso.as_str();
+            }
+        }
+    }
+
+    win.set_heatmap_total_commits_text(SharedString::from(format_u64(total_52w_commits)));
+    win.set_heatmap_active_days_text(SharedString::from(format!("{active_days} / {total_days} days")));
+    if peak_commits > 0 {
+        win.set_heatmap_peak_day_text(SharedString::from(format!(
+            "{peak_date} ({})",
+            format_u64(u64::from(peak_commits))
+        )));
+    } else {
+        win.set_heatmap_peak_day_text(SharedString::from("None"));
     }
 }
 
@@ -490,32 +588,32 @@ fn apply_phase2_progress_to_window(win: &AppWindow, progress: &ChurnBatchProgres
             .map(|(oid, files, ins, del)| (oid.as_str(), (*files, *ins, *del)))
             .collect();
         let current_model = win.get_commits();
-        let row_count: usize = slint::Model::row_count(&current_model);
-        let mut updated_rows: Vec<UiCommitRow> = Vec::with_capacity(row_count);
+        let row_count: usize = current_model.row_count();
         for idx in 0..row_count {
-            if let Some(mut row) = slint::Model::row_data(&current_model, idx) {
-                if let Some((files, ins, del)) = updates.get(row.oid_hex.as_str()) {
-                    row.files_changed = *files as i32;
-                    row.insertions = *ins as i32;
-                    row.deletions = *del as i32;
-                    row.churn_indexed = true;
-                }
-                updated_rows.push(row);
+            if let Some(mut row) = current_model.row_data(idx)
+                && let Some((files, ins, del)) = updates.get(row.oid_hex.as_str())
+            {
+                row.files_changed = *files as i32;
+                row.insertions = *ins as i32;
+                row.deletions = *del as i32;
+                row.churn_indexed = true;
+                current_model.set_row_data(idx, row);
             }
         }
-        win.set_commits(ModelRc::new(VecModel::from(updated_rows)));
     }
 
     if progress.is_complete {
         win.set_indexing_status_text(SharedString::from(format!(
             "Indexed {}/{} commits",
-            progress.indexed_commits, progress.total_commits
+            format_u64(u64::from(progress.indexed_commits)),
+            format_u64(u64::from(progress.total_commits))
         )));
         win.set_is_indexing(false);
     } else {
         win.set_indexing_status_text(SharedString::from(format!(
             "Indexing churn: {}/{}",
-            progress.indexed_commits, progress.total_commits
+            format_u64(u64::from(progress.indexed_commits)),
+            format_u64(u64::from(progress.total_commits))
         )));
         win.set_is_indexing(true);
     }
@@ -554,6 +652,7 @@ fn refresh_filtered_commits(win: &AppWindow, state_arc: &Arc<Mutex<ControllerSta
             }
             true
         })
+        .take(MAX_VISIBLE_COMMITS)
         .map(to_ui_commit_row)
         .collect();
 
@@ -571,9 +670,9 @@ fn trigger_commit_selection(
         let mut st = lock_state(state_arc);
         commit_oid_hex.clone_into(&mut st.selected_commit_oid);
         let meta = st
-            .all_commits
-            .iter()
-            .find(|c| c.oid_hex == commit_oid_hex)
+            .commit_idx_by_oid
+            .get(commit_oid_hex)
+            .and_then(|&idx| st.all_commits.get(idx))
             .map(|c| (c.summary.clone(), c.author_name.clone(), c.date_iso.clone()));
         (st.repo_path.clone(), meta)
     };
@@ -692,6 +791,7 @@ fn refresh_filtered_tree_entries(win: &AppWindow, state: &ControllerState) {
         .all_tree_entries
         .iter()
         .filter(|entry| query_lower.is_empty() || entry.path.to_ascii_lowercase().contains(&query_lower))
+        .take(MAX_VISIBLE_TREE_ENTRIES)
         .map(|entry| {
             let kib: u64 = (entry.size_bytes / BYTES_PER_KIB).max(1);
             UiTreeEntryRow {
@@ -699,7 +799,7 @@ fn refresh_filtered_tree_entries(win: &AppWindow, state: &ControllerState) {
                 file_name: SharedString::from(entry.file_name.as_str()),
                 depth: entry.depth as i32,
                 language: SharedString::from(entry.language.as_str()),
-                size_text: SharedString::from(format!("{kib} KiB")),
+                size_text: SharedString::from(format!("{} KiB", format_u64(kib))),
             }
         })
         .collect();
@@ -840,8 +940,13 @@ fn to_ui_language_model(languages: &[LanguageStat]) -> ModelRc<UiLanguageRow> {
             code: lang.code as i32,
             comments: lang.comments as i32,
             blanks: lang.blanks as i32,
+            files_text: SharedString::from(format_u64(u64::from(lang.files))),
+            code_text: SharedString::from(format_u64(lang.code)),
+            comments_text: SharedString::from(format_u64(lang.comments)),
+            blanks_text: SharedString::from(format_u64(lang.blanks)),
             percentage_text: SharedString::from(format!("{:.1}%", lang.percentage)),
-            ratio: lang.percentage.max(1.0),
+            share_fraction: (lang.percentage / 100.0).clamp(0.008, 1.0),
+            ratio: lang.percentage.max(0.04),
             color: Color::from_argb_u8(lang.color.a, lang.color.r, lang.color.g, lang.color.b),
         })
         .collect();
@@ -857,6 +962,9 @@ fn to_ui_contributor_model(contributors: &[ContributorStat]) -> ModelRc<UiContri
             commits: c.commits as i32,
             insertions: c.insertions as i32,
             deletions: c.deletions as i32,
+            commits_text: SharedString::from(format_u64(u64::from(c.commits))),
+            insertions_text: SharedString::from(format_u64(c.insertions)),
+            deletions_text: SharedString::from(format_u64(c.deletions)),
             active_range: SharedString::from(format!("{} -> {}", c.first_commit_date, c.last_commit_date)),
         })
         .collect();
@@ -873,6 +981,10 @@ fn to_ui_hotspot_model(hotspots: &[FileHotspot]) -> ModelRc<UiHotspotRow> {
             insertions: h.insertions as i32,
             deletions: h.deletions as i32,
             total_churn: h.total_churn as i32,
+            touches_text: SharedString::from(format_u64(u64::from(h.touches))),
+            insertions_text: SharedString::from(format_u64(h.insertions)),
+            deletions_text: SharedString::from(format_u64(h.deletions)),
+            total_churn_text: SharedString::from(format_u64(h.total_churn)),
         })
         .collect();
     ModelRc::new(VecModel::from(rows))
