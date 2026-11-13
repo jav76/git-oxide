@@ -152,7 +152,10 @@ jobs:
           fi
 
           cargo install cargo-generate-rpm --version "$CARGO_GENERATE_RPM_VERSION" --locked
-          cargo generate-rpm -p crates/app --target ${{ matrix.target }} --arch ${{ matrix.rpm_arch }} --output target/dist/
+          # RPM forbids '-' in Version; '~' also sorts the pre-release below the final version.
+          rpm_version="$(printf '%s' "$VERSION" | tr - '~')"
+          cargo generate-rpm -p crates/app --target ${{ matrix.target }} --arch ${{ matrix.rpm_arch }} \
+            --set-metadata "version = \"$rpm_version\"" --output target/dist/
 
           staging="git-oxide-${TAG}-linux-${{ matrix.arch }}"
           mkdir -p "target/dist/$staging"
@@ -256,6 +259,7 @@ jobs:
     container: debian:bookworm
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       TAG: ${{ needs.create.outputs.tag }}
     steps:
       - name: Install tools
