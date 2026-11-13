@@ -48,7 +48,7 @@ cargo run --release -- /path/to/repository
 - **Error Handling**: Use typed `thiserror` errors (`EngineError`) in `crates/engine` and `anyhow::Result` with `.context(...)` at top-level application entry points. Never `.unwrap()` fallible I/O or Git object lookups in production paths.
 - **Naming**: `snake_case` for functions, methods, modules, and variables; `PascalCase` for types, traits, and enums; `SCREAMING_SNAKE_CASE` for constants and `redb` `TableDefinition`s.
 - **UI Thread Discipline**: Never run `gix` traversals, `imara-diff` hunks, `tokei` scans, or `tree-sitter-highlight` passes on the Slint UI thread. Dispatch work to background threads and marshal updates via `slint::invoke_from_event_loop`.
-- **Documentation & Domain Terms**: Use the canonical terms defined in [GLOSSARY.md](GLOSSARY.md) and document irreversible architectural changes in `docs/adr/`.
+- **Documentation & Domain Terms**: Use the canonical terms defined in [GLOSSARY.md](GLOSSARY.md) and describe irreversible architectural changes inline in the PR description. Design decision documents live in the gitignored `docs/adr/` folder and are never force-added.
 
 ---
 

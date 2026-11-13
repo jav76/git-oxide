@@ -282,7 +282,8 @@ fn config_for_grammar(grammar: SupportedGrammar) -> &'static HighlightConfigurat
 
 /// Highlights a full file blob using `tree-sitter-highlight` and returns per-line `Coalesced Token Spans`.
 ///
-/// Enforces the 1 MB blob limit and 500-character line limit defined in `ADR-0002`.
+/// Enforces the `MAX_HIGHLIGHT_BLOB_BYTES` and `MAX_HIGHLIGHT_LINE_CHARS` guardrails so a
+/// single oversized blob or minified line cannot stall the highlighter.
 pub fn highlight_blob_lines(file_path: &str, content: &str) -> Vec<Vec<CodeTokenSpan>> {
     if content.is_empty() {
         return Vec::new();
@@ -392,7 +393,7 @@ fn finalize_line(line_spans: &mut Vec<CodeTokenSpan>, line_char_count: usize) {
         return;
     }
 
-    // ADR-0002 guardrail: collapse lines exceeding 500 chars into a single plain span.
+    // Collapse lines exceeding the character limit into a single plain span.
     if line_char_count > MAX_HIGHLIGHT_LINE_CHARS && line_spans.len() > 1 {
         let mut combined: String = String::with_capacity(line_char_count);
         for span in line_spans.iter() {

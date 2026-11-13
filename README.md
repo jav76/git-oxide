@@ -20,7 +20,7 @@ High-performance, strictly read-only desktop Git analytics, diff, and blame view
 - **Virtualized Unified & Side-by-Side Diffs (`imara-diff`)**:
   - Computes diffs on demand using the Histogram algorithm and renders both **Unified** and **Side-by-Side (Split)** modes in a single virtualized Slint `ListView` with old and new line numbers.
 - **Full-Blob AST Syntax Highlighting (`tree-sitter-highlight`)**:
-  - Parses full old and new blobs into syntax trees before aligning diff or blame lines, merges adjacent same-color tokens into `Coalesced Token Spans`, and enforces a 1 MB blob and 500-character line guardrail (`ADR-0002`).
+  - Parses full old and new blobs into syntax trees before aligning diff or blame lines, merges adjacent same-color tokens into `Coalesced Token Spans`, and enforces a 1 MB blob and 500-character line guardrail.
 - **Repository File Browser & Git Blame (`gix-blame`)**:
   - Browse the repository tree at any branch or tag, toggle between **Git Blame** and **Source Only** views, and click any blame gutter SHA to jump directly to the originating commit diff.
 
@@ -31,7 +31,6 @@ High-performance, strictly read-only desktop Git analytics, diff, and blame view
 | `crates/engine` | Pure-Rust Git analytics, `redb` `OID Cache`, `imara-diff`, `gix-blame`, `tokei`, and `tree-sitter-highlight` library (`git-oxide-engine`) |
 | `crates/app` | Slint UI desktop binary (`git-oxide`), `plotters` chart rasterizer, and background thread controller |
 | `crates/app/ui` | Declarative `.slint` components and views |
-| `docs/adr` | Architecture Decision Records (`0001` through `0004`) |
 | `GLOSSARY.md` | Canonical domain terminology |
 | `.agents/` | Repository-specific coding, logging, and architectural review rules |
 

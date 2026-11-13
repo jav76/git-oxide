@@ -2,3 +2,7 @@
 *.redb
 *.redb.lock
 .DS_Store
+
+# Internal design decisions stay out of the public repository.
+/docs/adr/
+/docs/internal/

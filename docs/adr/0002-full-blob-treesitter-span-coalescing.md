@@ -1,3 +1,0 @@
-# 0002: Full-Blob Tree-Sitter Highlighting with Span Coalescing and Guardrails
-
-Diff hunks and isolated lines lack surrounding syntactic context for accurate AST parsing, while instantiating one Slint `Text` node per raw lexer token degrades virtualized `ListView` scroll frame rates. `crates/engine` therefore parses the full old and new file blobs with bundled `tree-sitter-highlight` grammars before aligning lines with `imara-diff` (Histogram algorithm) or `gix::blame`, merges adjacent tokens sharing the same foreground color into Coalesced Token Spans (typically 4 to 8 spans per line), and bypasses AST parsing for blobs larger than 1 MB or individual lines exceeding 500 characters.
