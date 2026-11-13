@@ -31,7 +31,7 @@ High-performance, strictly read-only desktop Git analytics, diff, and blame view
 | `crates/engine` | Pure-Rust Git analytics, `redb` `OID Cache`, `imara-diff`, `gix-blame`, `tokei`, and `tree-sitter-highlight` library (`git-oxide-engine`) |
 | `crates/app` | Slint UI desktop binary (`git-oxide`), `plotters` chart rasterizer, and background thread controller |
 | `crates/app/ui` | Declarative `.slint` components and views |
-| `docs/adr` | Architecture Decision Records (`0001` through `0003`) |
+| `docs/adr` | Architecture Decision Records (`0001` through `0004`) |
 | `GLOSSARY.md` | Canonical domain terminology |
 | `.agents/` | Repository-specific coding, logging, and architectural review rules |
 
