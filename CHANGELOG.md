@@ -29,7 +29,7 @@ First public pre-release. Expect rough edges: the `OID Cache` schema, UI layout,
 
 ### Known limitations
 
-- Linux binaries need glibc 2.36 or newer (Debian 12+, Ubuntu 24.04+, Fedora 37+).
+- Linux binaries need glibc 2.35 or newer (Debian 12+, Ubuntu 22.04+, Fedora 36+).
 - Binaries are unsigned. Windows SmartScreen may warn on first launch of the `.msi` or `.exe`.
 - Windows `arm64` ships as a portable `.zip` only (no `.msi`).
 
