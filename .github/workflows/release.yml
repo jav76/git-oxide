@@ -12,6 +12,11 @@ on:
 permissions:
   contents: write
 
+# Container jobs default to `sh` (dash), which lacks `pipefail`, `[[ =~ ]]`, and `shopt`.
+defaults:
+  run:
+    shell: bash
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_DEB_VERSION: 3.8.0
