@@ -28,7 +28,6 @@ Before evaluating any code changes or diffs:
    - Code Style & Rust/Slint Standards: [.agents/rules/code-style.md](file:///home/jaret/Documents/GitHub/git-oxide/.agents/rules/code-style.md)
    - Logging Standards: [.agents/rules/logging.md](file:///home/jaret/Documents/GitHub/git-oxide/.agents/rules/logging.md)
    - Formatting Configurations: [rustfmt.toml](file:///home/jaret/Documents/GitHub/git-oxide/rustfmt.toml) and [.editorconfig](file:///home/jaret/Documents/GitHub/git-oxide/.editorconfig)
-   - Architecture Decision Records: `docs/adr/`
 2. **Inspect Knowledge Graphs**:
    - Check `graphify-out/graph.json` or `.ua/knowledge-graph.json` if present to trace module dependencies.
 
@@ -48,10 +47,10 @@ Verify that changes strictly respect the two-layer workspace dependency flow:
 ### Layer Rules & Invariants:
 1. **Core Engine (`crates/engine`)**:
    - Pure Rust library with zero GUI or windowing dependencies (`slint` and `plotters` are forbidden in `crates/engine`).
-   - Strictly read-only access to `.git` repositories (`ADR-0001`).
-   - Enforces the 1 MB blob and 500-character line AST highlighting guardrails and adjacent same-color span coalescing (`ADR-0002`).
+   - Strictly read-only access to `.git` repositories.
+   - Enforces the 1 MB blob and 500-character line AST highlighting guardrails and adjacent same-color span coalescing.
 2. **Desktop Presentation (`crates/app`)**:
-   - Owns `.slint` views, `plotters` `SharedPixelBuffer` chart rendering (`ADR-0003`), and background worker spawning.
+   - Owns `.slint` views, `plotters` `SharedPixelBuffer` chart rendering, and background worker spawning.
    - Never blocks the Slint UI thread on Git pack I/O, tree diffs, or `redb` transactions.
 
 ---

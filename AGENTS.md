@@ -25,7 +25,6 @@ cargo test --workspace
 | `crates/engine` | Pure-Rust Git analytics, `redb` OID Cache, `imara-diff`, `gix-blame`, `tokei`, and `tree-sitter-highlight` engine (zero UI dependencies) |
 | `crates/app` | Slint UI binary (`git-oxide`), `plotters` chart rasterizer, and background controller |
 | `crates/app/ui` | Declarative Slint markup (`.slint`), compiled by `crates/app/build.rs` |
-| `docs/adr` | Architecture Decision Records |
 | `.agents/rules` | Always-on repository coding, logging, and architectural context rules |
 | `.agents/agents` | Repository-specific code review agent configuration |
 | `GLOSSARY.md` | Domain terms (`Ref Target`, `Phase 1 Snapshot`, `Phase 2 Churn Index`, `OID Cache`, `Coalesced Token Span`, `Unified/Split Row`, `File Hotspot`) |
@@ -67,7 +66,7 @@ cargo test --workspace
 ## Docs, commits, and PRs
 
 - Keep `README.md` and `GLOSSARY.md` in sync with behavior and domain terminology.
-- Record hard-to-reverse decisions as `docs/adr/NNNN-short-title.md`.
+- Hard-to-reverse decisions are recorded as `docs/adr/NNNN-short-title.md`, which is gitignored: design decisions stay out of the public repository. Never force-add files under `docs/adr`.
 - Write concise, practical prose. Never use em-dashes: use hyphens, colons, parentheses, or separate sentences.
 - Commit messages use Conventional Commits (`feat(engine): ...`, `feat(app): ...`, `fix(engine): ...`, `docs: ...`), imperative mood, under 72 characters.
 - Never add AI attribution lines (`Co-Authored-By`, `Generated with`) to commits or PRs.

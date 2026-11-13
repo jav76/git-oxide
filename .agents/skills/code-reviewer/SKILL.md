@@ -12,7 +12,7 @@ Specialized reviewer for the **git-oxide** codebase (Rust 2024, `gix`, `redb`, `
 
 ## 1. Context Ingestion
 1. Load [AGENTS.md](../../../AGENTS.md), [GLOSSARY.md](../../../GLOSSARY.md), [.agents/rules/code-style.md](../../rules/code-style.md), and [.agents/rules/logging.md](../../rules/logging.md).
-2. Inspect `docs/adr/` for architectural invariants.
+2. Check `GLOSSARY.md` and the crate-level docs for architectural invariants.
 
 ## 2. Verification Commands
 ```bash

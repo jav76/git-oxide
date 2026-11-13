@@ -8,4 +8,4 @@ trigger: always_on
 - **Architectural Layers & Crate Seam**: Enforce the strict two-crate boundary:
   1. `crates/engine` (`git-oxide-engine`): Pure-Rust Git traversal (`gix`), `redb` OID Cache, `tokei` blob language analysis, `imara-diff` Unified/Split diffing, `gix` blame, and `tree-sitter-highlight` AST span coalescing. Must never depend on `slint` or UI crates.
   2. `crates/app` (`git-oxide`): Slint UI views, `plotters` `SharedPixelBuffer` chart rendering, and background thread orchestration (`slint::invoke_from_event_loop`).
-- **Domain Glossary & ADRs**: Consult [GLOSSARY.md](file:///home/jaret/Documents/GitHub/git-oxide/GLOSSARY.md) and `docs/adr/` before introducing new domain concepts or altering core indexing, caching, or highlighting pipelines.
+- **Domain Glossary**: Consult [GLOSSARY.md](file:///home/jaret/Documents/GitHub/git-oxide/GLOSSARY.md) before introducing new domain concepts or altering core indexing, caching, or highlighting pipelines.
