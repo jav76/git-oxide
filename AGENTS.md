@@ -27,7 +27,7 @@ cargo test --workspace
 | `crates/app/ui` | Declarative Slint markup (`.slint`), compiled by `crates/app/build.rs` |
 | `.agents/rules` | Always-on repository coding, logging, and architectural context rules |
 | `.agents/agents` | Repository-specific code review agent configuration |
-| `GLOSSARY.md` | Domain terms (`Ref Target`, `Phase 1 Snapshot`, `Phase 2 Churn Index`, `OID Cache`, `Coalesced Token Span`, `Unified/Split Row`, `File Hotspot`) |
+| `GLOSSARY.md` | Domain terms (`Linked Worktree`, `Ref Target`, `Phase 1 Snapshot`, `Phase 2 Churn Index`, `OID Cache`, `Coalesced Token Span`, `Unified/Split Row`, `File Hotspot`) |
 
 ## Rust
 

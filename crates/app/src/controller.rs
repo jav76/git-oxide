@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use git_oxide_engine::cache::OidCache;
+use git_oxide_engine::error::EngineError;
 use git_oxide_engine::indexer::{run_phase1, run_phase2_churn};
 use git_oxide_engine::models::{
     BlameLineRow, ChangedFileStat, ChurnBatchProgress, ChurnTimeBucket, CodeTokenSpan, CommitSummary, ContributorStat,
@@ -373,6 +375,8 @@ fn start_repository_load(
         win.set_repo_path(SharedString::from(repo_path.display().to_string()));
         win.set_indexing_status_text(SharedString::from("Scanning commit graph..."));
         win.set_is_indexing(true);
+        win.set_has_error(false);
+        win.set_worktree_label(SharedString::default());
         win.set_active_filter_text(SharedString::default());
     }
 
@@ -401,6 +405,7 @@ fn start_repository_load(
                 let snapshot_for_ui: Phase1Snapshot = Phase1Snapshot {
                     repo_name: snapshot.repo_name.clone(),
                     repo_path: snapshot.repo_path.clone(),
+                    linked_worktree_of: snapshot.linked_worktree_of.clone(),
                     active_ref_name: snapshot.active_ref_name.clone(),
                     active_ref_oid_hex: snapshot.active_ref_oid_hex.clone(),
                     refs: snapshot.refs.clone(),
@@ -436,7 +441,7 @@ fn start_repository_load(
                 let mut last_ui_push: Option<Instant> = None;
                 let mut pending_commit_updates: Vec<(String, u32, u32, u32)> = Vec::new();
 
-                let _ = run_phase2_churn(
+                let phase2_result: Result<(), EngineError> = run_phase2_churn(
                     &repo_path_bg,
                     &snapshot,
                     &cache,
@@ -476,17 +481,34 @@ fn start_repository_load(
                         }
                     },
                 );
-            }
-            Err(error) => {
-                log::warn!("failed to run Phase 1 snapshot: {error}");
-                let err_msg: String = format!("Error: {error}");
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(win) = win_weak_bg.upgrade() {
-                        win.set_indexing_status_text(SharedString::from(err_msg));
-                        win.set_is_indexing(false);
+                match phase2_result {
+                    Ok(()) | Err(EngineError::Cancelled) => {}
+                    Err(error) => {
+                        report_background_error(
+                            &win_weak_bg,
+                            &anyhow::Error::from(error).context("failed to index commit churn"),
+                        );
                     }
-                });
+                }
             }
+            Err(EngineError::Cancelled) => {}
+            Err(error) => {
+                report_background_error(&win_weak_bg, &anyhow::Error::from(error).context("failed to scan repository"));
+            }
+        }
+    });
+}
+
+/// Logs a failed background load and shows the full error chain in the top bar status.
+fn report_background_error(window_weak: &Weak<AppWindow>, error: &anyhow::Error) {
+    log::warn!("{error:#}");
+    let status_text: String = format!("Error: {error:#}");
+    let window_for_ui: Weak<AppWindow> = window_weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(win) = window_for_ui.upgrade() {
+            win.set_indexing_status_text(SharedString::from(status_text));
+            win.set_has_error(true);
+            win.set_is_indexing(false);
         }
     });
 }
@@ -494,6 +516,9 @@ fn start_repository_load(
 fn apply_phase1_snapshot_to_window(win: &AppWindow, snapshot: &Phase1Snapshot) {
     win.set_repo_name(SharedString::from(snapshot.repo_name.as_str()));
     win.set_repo_path(SharedString::from(snapshot.repo_path.as_str()));
+    let worktree_label: String =
+        snapshot.linked_worktree_of.as_ref().map_or_else(String::new, |main_path| format!("worktree of {main_path}"));
+    win.set_worktree_label(SharedString::from(worktree_label));
 
     let ref_names: Vec<SharedString> =
         snapshot.refs.iter().map(|r| SharedString::from(r.display_name.as_str())).collect();
@@ -687,12 +712,26 @@ fn trigger_commit_selection(
     let repo_for_diff: PathBuf = repo_path.clone();
 
     let _ = thread::Builder::new().name("git-oxide-changed-files".to_owned()).spawn(move || {
-        let Ok(files) = load_commit_changed_files(&repo_path, &oid_owned) else {
-            return;
+        let files: Vec<ChangedFileStat> = match load_commit_changed_files(&repo_path, &oid_owned)
+            .with_context(|| format!("failed to list files changed in commit {oid_owned}"))
+        {
+            Ok(files) => files,
+            Err(error) => {
+                report_background_error(&win_weak_bg, &error);
+                return;
+            }
         };
         let first_file_path: Option<String> = files.first().map(|f| f.path.clone());
         let initial_diff: Vec<DiffLineRow> = match &first_file_path {
-            Some(path) => load_commit_file_diff(&repo_for_diff, &oid_owned, path).unwrap_or_default(),
+            Some(path) => match load_commit_file_diff(&repo_for_diff, &oid_owned, path)
+                .with_context(|| format!("failed to diff {path} in commit {oid_owned}"))
+            {
+                Ok(rows) => rows,
+                Err(error) => {
+                    report_background_error(&win_weak_bg, &error);
+                    Vec::new()
+                }
+            },
             None => Vec::new(),
         };
         let is_split: bool = {
@@ -728,18 +767,25 @@ fn spawn_file_diff_load(
     }
 
     let _ = thread::Builder::new().name("git-oxide-diff".to_owned()).spawn(move || {
-        if let Ok(rows) = load_commit_file_diff(&repo_path, &oid_owned, &path_owned) {
-            let is_split: bool = {
-                let mut st = lock_state(&state_bg);
-                st.current_diff_rows.clone_from(&rows);
-                st.is_split_diff
-            };
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(win) = win_weak_bg.upgrade() {
-                    win.set_diff_rows(to_ui_diff_rows_model(&rows, is_split));
-                }
-            });
-        }
+        let rows: Vec<DiffLineRow> = match load_commit_file_diff(&repo_path, &oid_owned, &path_owned)
+            .with_context(|| format!("failed to diff {path_owned} in commit {oid_owned}"))
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                report_background_error(&win_weak_bg, &error);
+                return;
+            }
+        };
+        let is_split: bool = {
+            let mut st = lock_state(&state_bg);
+            st.current_diff_rows.clone_from(&rows);
+            st.is_split_diff
+        };
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(win) = win_weak_bg.upgrade() {
+                win.set_diff_rows(to_ui_diff_rows_model(&rows, is_split));
+            }
+        });
     });
 }
 
@@ -760,23 +806,30 @@ fn spawn_tree_entries_load(
     let state_bg: Arc<Mutex<ControllerState>> = Arc::clone(state_arc);
 
     let _ = thread::Builder::new().name("git-oxide-tree".to_owned()).spawn(move || {
-        if let Ok(entries) = load_ref_tree_entries(&repo_path, &ref_oid) {
-            let target_file: Option<String> = select_path_after.or_else(|| entries.first().map(|e| e.path.clone()));
-            {
-                let mut st = lock_state(&state_bg);
-                st.all_tree_entries = entries;
+        let entries: Vec<TreeEntryItem> = match load_ref_tree_entries(&repo_path, &ref_oid)
+            .with_context(|| format!("failed to list files at {ref_oid}"))
+        {
+            Ok(entries) => entries,
+            Err(error) => {
+                report_background_error(&win_weak_bg, &error);
+                return;
             }
-            let win_ui: Weak<AppWindow> = win_weak_bg.clone();
-            let state_ui: Arc<Mutex<ControllerState>> = Arc::clone(&state_bg);
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(win) = win_ui.upgrade() {
-                    refresh_filtered_tree_entries(&win, &lock_state(&state_ui));
-                }
-                if let Some(path) = target_file {
-                    trigger_tree_file_selection(&win_ui, &state_ui, &path);
-                }
-            });
+        };
+        let target_file: Option<String> = select_path_after.or_else(|| entries.first().map(|e| e.path.clone()));
+        {
+            let mut st = lock_state(&state_bg);
+            st.all_tree_entries = entries;
         }
+        let win_ui: Weak<AppWindow> = win_weak_bg.clone();
+        let state_ui: Arc<Mutex<ControllerState>> = Arc::clone(&state_bg);
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(win) = win_ui.upgrade() {
+                refresh_filtered_tree_entries(&win, &lock_state(&state_ui));
+            }
+            if let Some(path) = target_file {
+                trigger_tree_file_selection(&win_ui, &state_ui, &path);
+            }
+        });
     });
 }
 
@@ -823,18 +876,21 @@ fn trigger_tree_file_selection(
     let path_owned: String = file_path.to_owned();
 
     let _ = thread::Builder::new().name("git-oxide-blame".to_owned()).spawn(move || {
-        let result: Result<Vec<BlameLineRow>, _> = if show_blame {
+        let result: Result<Vec<BlameLineRow>, EngineError> = if show_blame {
             load_ref_file_blame(&repo_path, &ref_oid, &path_owned)
         } else {
             load_ref_file_source(&repo_path, &ref_oid, &path_owned)
         };
 
-        if let Ok(rows) = result {
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(win) = win_weak_bg.upgrade() {
-                    win.set_blame_rows(to_ui_blame_rows_model(&rows));
-                }
-            });
+        match result.with_context(|| format!("failed to load {path_owned} at {ref_oid}")) {
+            Ok(rows) => {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(win) = win_weak_bg.upgrade() {
+                        win.set_blame_rows(to_ui_blame_rows_model(&rows));
+                    }
+                });
+            }
+            Err(error) => report_background_error(&win_weak_bg, &error),
         }
     });
 }

@@ -251,6 +251,8 @@ pub struct BlameLineRow {
 pub struct Phase1Snapshot {
     pub repo_path: String,
     pub repo_name: String,
+    /// Main worktree (or bare repository) path when the opened repository is a linked worktree.
+    pub linked_worktree_of: Option<String>,
     pub active_ref_name: String,
     pub active_ref_oid_hex: String,
     pub refs: Vec<RefItem>,

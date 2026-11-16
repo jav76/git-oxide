@@ -40,6 +40,8 @@ export component AppWindow inherits Window {
     in property <string> active-filter-text: "";
     in property <string> indexing-status-text: "Ready";
     in property <bool> is-indexing: false;
+    in property <bool> has-error: false;
+    in property <string> worktree-label: "";
     in-out property <int> active-view: 0;
 
     // Analytics view properties
@@ -138,6 +140,8 @@ export component AppWindow inherits Window {
                 active-filter-text: root.active-filter-text;
                 indexing-status-text: root.indexing-status-text;
                 is-indexing: root.is-indexing;
+                has-error: root.has-error;
+                worktree-label: root.worktree-label;
                 open-repo-dialog => {
                     root.open-repo-dialog();
                 }

@@ -23,6 +23,8 @@ High-performance, strictly read-only desktop Git analytics, diff, and blame view
   - Parses full old and new blobs into syntax trees before aligning diff or blame lines, merges adjacent same-color tokens into `Coalesced Token Spans`, and enforces a 1 MB blob and 500-character line guardrail.
 - **Repository File Browser & Git Blame (`gix-blame`)**:
   - Browse the repository tree at any branch or tag, toggle between **Git Blame** and **Source Only** views, and click any blame gutter SHA to jump directly to the originating commit diff.
+- **Linked Worktree Support**:
+  - Open any `git worktree add` checkout (or a subdirectory of one). History, diffs, and blame follow that worktree's own `HEAD`, and the top bar shows which main repository it belongs to. Click an error in the status pill to read and copy the full cause.
 
 ## Workspace Layout
 

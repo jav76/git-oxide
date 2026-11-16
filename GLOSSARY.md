@@ -1,5 +1,7 @@
 # Glossary
 
+- **Linked Worktree**: A working directory created with `git worktree add` that has its own `HEAD` and index under `<main>/.git/worktrees/<name>` but shares objects and refs with the main repository through `commondir`.
+  - _Avoid_: secondary checkout, worktree copy, clone.
 - **Ref Target**: The immutable 20-byte commit OID resolved from `HEAD`, a local/remote branch, or a tag against which all repository analytics, commit history, and tree browsing are currently scoped.
   - _Avoid_: current branch, active checkout, working head.
 - **Phase 1 Snapshot**: The fast initial repository scan (commit DAG traversal, author commit counts, 52-week commit heatmap, and target-tree language breakdown) that completes in milliseconds without diffing historical parent trees.
