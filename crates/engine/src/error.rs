@@ -9,6 +9,14 @@ pub enum EngineError {
     #[error("git operation failed: {0}")]
     GitOperation(String),
 
+    /// The object database could not be read. Often transient on Windows while another git process
+    /// repacks or locks pack files.
+    #[error("failed to read git objects: {0}")]
+    ObjectRead(String),
+
+    #[error("branch '{branch}' has no commits yet")]
+    UnbornHead { branch: String },
+
     #[error("oid cache failure: {0}")]
     CacheError(String),
 

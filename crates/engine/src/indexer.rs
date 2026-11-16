@@ -16,6 +16,7 @@ use crate::models::{
     FileChurnEntry, FileHotspot, HEATMAP_WEEKS, HeatmapDay, HeatmapWeek, LanguageBlobStats, LanguageStat,
     Phase1Snapshot, RefItem, RefKind, TreeEntryItem,
 };
+use crate::repository::{error_chain, linked_worktree_parent, open_repository, retry_on_object_read};
 use crate::tree_blame::{
     TOKEI_CONFIG, classify_language_name, format_date_iso, language_badge_color, list_tree_entries_with_options,
     shorten_oid_str,
@@ -194,26 +195,37 @@ pub fn oid_to_bytes(oid: ObjectId) -> [u8; OID_BYTE_LEN] {
 }
 
 /// Executes the fast `Phase 1 Snapshot` scan for a repository and `Ref Target`.
+///
+/// Retries once when the object database cannot be read, which happens on Windows while another git process
+/// repacks or locks pack files.
 pub fn run_phase1(
     repo_path: &Path,
     target_ref: Option<&str>,
     cache: &OidCache,
     cancel_flag: &AtomicBool,
 ) -> Result<Phase1Snapshot, EngineError> {
+    retry_on_object_read(|| run_phase1_once(repo_path, target_ref, cache, cancel_flag))
+}
+
+fn run_phase1_once(
+    repo_path: &Path,
+    target_ref: Option<&str>,
+    cache: &OidCache,
+    cancel_flag: &AtomicBool,
+) -> Result<Phase1Snapshot, EngineError> {
     let start_time: Instant = Instant::now();
-    let mut repo: gix::Repository = gix::discover(repo_path).map_err(|error| EngineError::RepositoryOpen {
-        path: repo_path.display().to_string(),
-        message: error.to_string(),
-    })?;
+    let mut repo: gix::Repository = open_repository(repo_path)?;
     repo.object_cache_size_if_unset(WORKER_OBJECT_CACHE_BYTES);
 
     let workdir_or_git: &Path = repo.work_dir().unwrap_or_else(|| repo.path());
     let repo_display_path: String = workdir_or_git.display().to_string();
     let repo_name: String =
         workdir_or_git.file_name().and_then(|name| name.to_str()).unwrap_or("repository").to_owned();
+    let linked_worktree_of: Option<String> = linked_worktree_parent(&repo).map(|path| path.display().to_string());
 
-    let refs: Vec<RefItem> = collect_repository_refs(&repo);
-    let (active_ref_name, active_ref_oid) = resolve_active_ref(&repo, target_ref, &refs)?;
+    let ref_scan: RefScan = collect_repository_refs(&repo);
+    let (active_ref_name, active_ref_oid) = resolve_active_ref(&repo, target_ref, &ref_scan)?;
+    let refs: Vec<RefItem> = ref_scan.items;
     let active_ref_oid_hex: String = active_ref_oid.to_hex().to_string();
 
     if cancel_flag.load(Ordering::Relaxed) {
@@ -277,6 +289,7 @@ pub fn run_phase1(
     Ok(Phase1Snapshot {
         repo_path: repo_display_path,
         repo_name,
+        linked_worktree_of,
         active_ref_name,
         active_ref_oid_hex,
         refs,
@@ -354,12 +367,7 @@ where
         return Ok(());
     }
 
-    let shared_repo: gix::ThreadSafeRepository = gix::discover(repo_path)
-        .map_err(|error| EngineError::RepositoryOpen {
-            path: repo_path.display().to_string(),
-            message: error.to_string(),
-        })?
-        .into_sync();
+    let shared_repo: gix::ThreadSafeRepository = open_repository(repo_path)?.into_sync();
 
     for chunk in uncached_indices.chunks(CHURN_BATCH_SIZE) {
         if cancel_flag.load(Ordering::Relaxed) {
@@ -447,66 +455,111 @@ where
     Ok(())
 }
 
-fn collect_repository_refs(repo: &gix::Repository) -> Vec<RefItem> {
-    let mut items: Vec<RefItem> = Vec::new();
+/// Refs whose targets could be resolved, plus the first failure, so an unreadable object database is reported
+/// instead of looking like an empty repository.
+struct RefScan {
+    items: Vec<RefItem>,
+    first_error: Option<String>,
+}
 
-    if let Ok(mut head) = repo.head()
-        && let Ok(Some(oid)) = head.try_peel_to_id_in_place()
-    {
-        let head_label: String = head
-            .referent_name()
-            .map_or_else(|| "HEAD (detached)".to_owned(), |name| format!("HEAD ({})", name.shorten()));
-        items.push(RefItem {
-            display_name: head_label,
-            full_ref_name: "HEAD".to_owned(),
-            target_oid_hex: oid.detach().to_hex().to_string(),
-            kind: RefKind::Head,
-        });
-    }
-
-    if let Ok(platform) = repo.references()
-        && let Ok(all_refs) = platform.all()
-    {
-        for reference_result in all_refs.flatten() {
-            let mut reference = reference_result;
-            let full_name: String = reference.name().as_bstr().to_string();
-            let short_name: String = reference.name().shorten().to_string();
-            let kind: RefKind = if full_name.starts_with("refs/heads/") {
-                RefKind::LocalBranch
-            } else if full_name.starts_with("refs/remotes/") {
-                RefKind::RemoteBranch
-            } else if full_name.starts_with("refs/tags/") {
-                RefKind::Tag
-            } else {
-                continue;
-            };
-
-            if let Ok(id) = reference.peel_to_id_in_place() {
-                let target_oid: ObjectId = id.detach();
-                let is_commit: bool = match kind {
-                    RefKind::Head | RefKind::LocalBranch | RefKind::RemoteBranch => true,
-                    RefKind::Tag => repo.find_object(target_oid).is_ok_and(|obj| obj.try_into_commit().is_ok()),
-                };
-                if is_commit {
-                    items.push(RefItem {
-                        display_name: short_name,
-                        full_ref_name: full_name,
-                        target_oid_hex: target_oid.to_hex().to_string(),
-                        kind,
-                    });
-                }
-            }
+impl RefScan {
+    fn record_error(&mut self, context: &str, error: &(dyn std::error::Error + 'static)) {
+        if self.first_error.is_none() {
+            self.first_error = Some(format!("{context}: {}", error_chain(error)));
         }
     }
+}
 
-    items
+fn collect_repository_refs(repo: &gix::Repository) -> RefScan {
+    let mut scan: RefScan = RefScan { items: Vec::new(), first_error: None };
+
+    match repo.head() {
+        Ok(mut head) => match head.try_peel_to_id_in_place() {
+            Ok(Some(oid)) => {
+                let head_label: String = head
+                    .referent_name()
+                    .map_or_else(|| "HEAD (detached)".to_owned(), |name| format!("HEAD ({})", name.shorten()));
+                scan.items.push(RefItem {
+                    display_name: head_label,
+                    full_ref_name: "HEAD".to_owned(),
+                    target_oid_hex: oid.detach().to_hex().to_string(),
+                    kind: RefKind::Head,
+                });
+            }
+            Ok(None) => {}
+            Err(error) => scan.record_error("failed to resolve HEAD", &error),
+        },
+        Err(error) => scan.record_error("failed to read HEAD", &error),
+    }
+
+    collect_named_refs(repo, &mut scan);
+    scan
+}
+
+fn collect_named_refs(repo: &gix::Repository, scan: &mut RefScan) {
+    let platform = match repo.references() {
+        Ok(platform) => platform,
+        Err(error) => {
+            scan.record_error("failed to open references", &error);
+            return;
+        }
+    };
+    let all_refs = match platform.all() {
+        Ok(all_refs) => all_refs,
+        Err(error) => {
+            scan.record_error("failed to list references", &error);
+            return;
+        }
+    };
+
+    for reference_result in all_refs {
+        let mut reference = match reference_result {
+            Ok(reference) => reference,
+            Err(error) => {
+                scan.record_error("failed to read a reference", error.as_ref());
+                continue;
+            }
+        };
+        let full_name: String = reference.name().as_bstr().to_string();
+        let short_name: String = reference.name().shorten().to_string();
+        let kind: RefKind = if full_name.starts_with("refs/heads/") {
+            RefKind::LocalBranch
+        } else if full_name.starts_with("refs/remotes/") {
+            RefKind::RemoteBranch
+        } else if full_name.starts_with("refs/tags/") {
+            RefKind::Tag
+        } else {
+            continue;
+        };
+
+        let target_oid: ObjectId = match reference.peel_to_id_in_place() {
+            Ok(id) => id.detach(),
+            Err(error) => {
+                scan.record_error(&format!("failed to resolve {full_name}"), &error);
+                continue;
+            }
+        };
+        let is_commit: bool = match kind {
+            RefKind::Head | RefKind::LocalBranch | RefKind::RemoteBranch => true,
+            RefKind::Tag => repo.find_object(target_oid).is_ok_and(|obj| obj.try_into_commit().is_ok()),
+        };
+        if is_commit {
+            scan.items.push(RefItem {
+                display_name: short_name,
+                full_ref_name: full_name,
+                target_oid_hex: target_oid.to_hex().to_string(),
+                kind,
+            });
+        }
+    }
 }
 
 fn resolve_active_ref(
     repo: &gix::Repository,
     target_ref: Option<&str>,
-    refs: &[RefItem],
+    ref_scan: &RefScan,
 ) -> Result<(String, ObjectId), EngineError> {
+    let refs: &[RefItem] = &ref_scan.items;
     if let Some(requested) = target_ref.map(str::trim).filter(|s| !s.is_empty()) {
         if let Some(found) = refs.iter().find(|item| {
             item.full_ref_name == requested || item.display_name == requested || item.target_oid_hex == requested
@@ -521,15 +574,25 @@ fn resolve_active_ref(
     }
 
     if let Some(first_ref) = refs.first() {
+        if let Some(error) = &ref_scan.first_error {
+            log::warn!("skipped unreadable refs in {}: {error}", repo.git_dir().display());
+        }
         let oid: ObjectId = parse_oid_hex(&first_ref.target_oid_hex)?;
         return Ok((first_ref.display_name.clone(), oid));
     }
 
-    let oid: ObjectId = repo
-        .head_id()
-        .map_err(|error| EngineError::GitOperation(format!("repository has no commits at HEAD: {error}")))?
-        .detach();
-    Ok(("HEAD".to_owned(), oid))
+    if let Ok(head) = repo.head()
+        && head.is_unborn()
+        && ref_scan.first_error.is_none()
+    {
+        let branch: String = head.referent_name().map_or_else(|| "HEAD".to_owned(), |name| name.shorten().to_string());
+        return Err(EngineError::UnbornHead { branch });
+    }
+
+    match &ref_scan.first_error {
+        Some(message) => Err(EngineError::ObjectRead(message.clone())),
+        None => Err(EngineError::GitOperation("repository has no branches, tags, or HEAD commit".to_owned())),
+    }
 }
 
 fn walk_commit_graph(
@@ -649,12 +712,7 @@ fn compute_ref_languages(
     }
 
     if !uncached_items.is_empty() {
-        let shared_repo: gix::ThreadSafeRepository = gix::discover(repo_path)
-            .map_err(|error| EngineError::RepositoryOpen {
-                path: repo_path.display().to_string(),
-                message: error.to_string(),
-            })?
-            .into_sync();
+        let shared_repo: gix::ThreadSafeRepository = open_repository(repo_path)?.into_sync();
 
         let newly_parsed: Vec<([u8; OID_BYTE_LEN], LanguageBlobStats)> = uncached_items
             .par_chunks(128)
