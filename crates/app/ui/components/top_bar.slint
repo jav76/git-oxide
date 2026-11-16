@@ -9,6 +9,8 @@ export component TopBar inherits Rectangle {
     in property <string> active-filter-text: "";
     in property <string> indexing-status-text: "Ready";
     in property <bool> is-indexing: false;
+    in property <bool> has-error: false;
+    in property <string> worktree-label: "";
 
     callback open-repo-dialog();
     callback select-ref(string);
@@ -67,6 +69,29 @@ export component TopBar inherits Rectangle {
                     font-size: 11px;
                     overflow: elide;
                     max-width: 340px;
+                }
+            }
+
+            if root.worktree-label != "": Rectangle {
+                height: 20px;
+                width: min(worktree-text.preferred-width + 14px, 280px);
+                y: (parent.height - self.height) / 2;
+                border-radius: 4px;
+                background: Theme.bg-elevated;
+                border-width: 1px;
+                border-color: Theme.accent-primary;
+                accessible-role: text;
+                accessible-label: root.worktree-label;
+
+                worktree-text := Text {
+                    width: parent.width - 14px;
+                    text: root.worktree-label;
+                    color: Theme.accent-primary;
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    overflow: elide;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
                 }
             }
 
@@ -144,22 +169,82 @@ export component TopBar inherits Rectangle {
             spacing: 8px;
             alignment: end;
 
-            Rectangle {
+            status-pill := Rectangle {
+                property <color> status-color: root.has-error
+                    ? Theme.accent-coral
+                    : (root.is-indexing ? Theme.accent-amber : Theme.accent-emerald);
+
                 height: 26px;
-                width: status-label.preferred-width + 20px;
+                width: min(status-label.preferred-width + 20px, 520px);
                 y: (parent.height - self.height) / 2;
                 border-radius: 4px;
-                background: Theme.bg-elevated;
+                background: status-touch.has-hover && root.has-error ? Theme.bg-hover : Theme.bg-elevated;
                 border-width: 1px;
-                border-color: root.is-indexing ? Theme.accent-amber : Theme.accent-emerald;
+                border-color: self.status-color;
+                accessible-role: button;
+                accessible-label: root.has-error ? "Show full error details" : root.indexing-status-text;
+                accessible-action-default => {
+                    if root.has-error {
+                        error-popup.show();
+                    }
+                }
 
                 status-label := Text {
+                    width: parent.width - 20px;
                     text: root.indexing-status-text;
-                    color: root.is-indexing ? Theme.accent-amber : Theme.accent-emerald;
+                    color: status-pill.status-color;
                     font-family: Theme.font-mono;
                     font-size: 11px;
+                    overflow: elide;
                     horizontal-alignment: center;
                     vertical-alignment: center;
+                }
+
+                status-touch := TouchArea {
+                    mouse-cursor: root.has-error ? MouseCursor.pointer : MouseCursor.default;
+                    clicked => {
+                        if root.has-error {
+                            error-popup.show();
+                        }
+                    }
+                }
+
+                error-popup := PopupWindow {
+                    x: parent.width - self.width;
+                    y: parent.height + 6px;
+                    width: 560px;
+                    close-policy: close-on-click-outside;
+
+                    Rectangle {
+                        background: Theme.bg-elevated;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: Theme.accent-coral;
+
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 8px;
+
+                            Text {
+                                text: "Error details (select to copy)";
+                                color: Theme.text-secondary;
+                                font-size: 11px;
+                                font-weight: 700;
+                            }
+
+                            TextInput {
+                                text: root.indexing-status-text;
+                                read-only: true;
+                                single-line: false;
+                                wrap: word-wrap;
+                                color: Theme.text-primary;
+                                font-family: Theme.font-mono;
+                                font-size: 11px;
+                                accessible-role: text-input;
+                                accessible-label: "Full error message";
+                            }
+                        }
+                    }
                 }
             }
         }
