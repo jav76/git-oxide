@@ -6,6 +6,19 @@ All notable changes to `git-oxide` are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Linked worktree support is now covered by integration tests (branch, detached `HEAD`, subdirectory open, `extensions.worktreeConfig`). The top bar shows a `worktree of <main repo>` badge when a linked worktree is open.
+- Click an error in the top bar status to see the full message in a popup where the text can be selected and copied.
+- CI runs the engine test suite on Windows.
+
+### Fixed
+
+- Errors now include their full cause chain instead of only the outermost message. The misleading "repository has no commits at HEAD" error is replaced by the actual object database failure, or by "branch '<name>' has no commits yet" for a truly empty repository.
+- Failures while listing refs are reported instead of silently producing an empty ref list.
+- Phase 1 retries once after a short delay when git objects cannot be read, which happens on Windows while another git process repacks or locks pack files.
+- Failures in the Phase 2 Churn Index, changed-file list, diff, file tree, and blame loaders are logged and shown in the status bar instead of being dropped.
+
 ## [0.1.0-alpha.1] - 2026-11-13
 
 First public pre-release. Expect rough edges: the `OID Cache` schema, UI layout, and packaging may change before `0.1.0`.
